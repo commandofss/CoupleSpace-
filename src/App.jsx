@@ -1147,6 +1147,42 @@ export default function CoupleSpace() {
           </div>
         </div>
 
+        {/* OR divider */}
+        <div className="f5" style={{display:"flex",alignItems:"center",gap:12,margin:"4px 0"}}>
+          <div style={{flex:1,height:1,background:"linear-gradient(90deg,transparent,rgba(59,130,246,0.15))"}}/>
+          <span style={{fontFamily:"'DM Sans',sans-serif",color:"rgba(59,130,246,0.3)",fontSize:11,letterSpacing:1}}>OR</span>
+          <div style={{flex:1,height:1,background:"linear-gradient(90deg,rgba(59,130,246,0.15),transparent)"}}/>
+        </div>
+
+        {/* ── Wallet card — Send/Receive funds, fully separate ── */}
+        <div className="f6" style={{background:"linear-gradient(145deg,rgba(29,78,216,0.22),rgba(59,130,246,0.08),rgba(0,0,0,0.7))",borderRadius:24,padding:"22px 20px",border:"1px solid rgba(59,130,246,0.2)",boxShadow:"0 8px 36px rgba(29,78,216,0.2)",marginTop:14,cursor:"pointer"}}
+          onClick={()=>goTo(SCREENS.WALLET)}>
+          <div style={{display:"flex",alignItems:"center",gap:16,marginBottom:14}}>
+            <div style={{width:52,height:52,borderRadius:18,flexShrink:0,background:"linear-gradient(135deg,rgba(29,78,216,0.55),rgba(59,130,246,0.35))",border:"1px solid rgba(59,130,246,0.35)",display:"flex",alignItems:"center",justifyContent:"center",fontSize:24}}>💳</div>
+            <div style={{flex:1}}>
+              <p style={{fontFamily:"'Cormorant Garamond',serif",color:"#FFFFFF",fontSize:20,fontWeight:400,margin:"0 0 3px",letterSpacing:0.3}}>
+                Your <em style={{color:"#60A5FA"}}>Wallet</em>
+              </p>
+              <p style={{fontFamily:"'DM Sans',sans-serif",color:"rgba(96,165,250,0.55)",fontSize:12,fontWeight:300,margin:0,lineHeight:1.5}}>
+                Send & receive · SUI and USDC balances
+              </p>
+            </div>
+            <span style={{color:"rgba(96,165,250,0.5)",fontSize:20,flexShrink:0}}>→</span>
+          </div>
+          <div style={{display:"grid",gridTemplateColumns:"1fr 1fr 1fr",gap:8}}>
+            {[{icon:"↑",label:"Send"},{icon:"↓",label:"Receive"},{icon:"⚡",label:"Gas-sponsored"}].map(f=>(
+              <div key={f.label} style={{background:"rgba(59,130,246,0.06)",borderRadius:12,padding:"10px 8px",border:"1px solid rgba(59,130,246,0.1)",textAlign:"center"}}>
+                <div style={{fontSize:18,marginBottom:4}}>{f.icon}</div>
+                <p style={{fontFamily:"'DM Sans',sans-serif",color:"rgba(96,165,250,0.6)",fontSize:10,fontWeight:400,margin:0,lineHeight:1.3}}>{f.label}</p>
+              </div>
+            ))}
+          </div>
+          <div style={{marginTop:14,background:"rgba(59,130,246,0.07)",borderRadius:10,padding:"8px 14px",border:"1px solid rgba(59,130,246,0.1)",display:"flex",alignItems:"center",gap:8}}>
+            <span style={{fontSize:12}}>💳</span>
+            <p style={{fontFamily:"'DM Sans',sans-serif",color:"rgba(96,165,250,0.4)",fontSize:11,fontWeight:300,margin:0}}>No partner needed · Your zkLogin Sui address</p>
+          </div>
+        </div>
+
         <p className="f6" style={{fontFamily:"'DM Sans',sans-serif",color:"rgba(29,155,240,0.25)",fontSize:11,textAlign:"center",marginTop:22,letterSpacing:0.5,lineHeight:1.8}}>Powered by Sui zkLogin · Your keys, your future.</p>
       </div>
     </div>
@@ -1632,7 +1668,7 @@ export default function CoupleSpace() {
       <div style={{...S.meshBg,background:"radial-gradient(ellipse 70% 50% at 50% 0%, rgba(4,120,87,0.4) 0%, transparent 70%)"}}/>
       <div style={{padding:"52px 22px 40px",position:"relative",zIndex:1}}>
 
-        <button style={{...S.backBtn,color:"rgba(16,185,129,0.5)"}} onClick={()=>goTo(SCREENS.LOGIN)}>← back</button>
+        <button style={{...S.backBtn,color:"rgba(16,185,129,0.5)"}} onClick={()=>goTo(SCREENS.LOGIN)}>← spaces</button>
 
         <div className="f1" style={{textAlign:"center",margin:"16px 0 28px"}}>
           <div style={{width:70,height:70,borderRadius:"50%",background:"linear-gradient(135deg,rgba(4,120,87,0.5),rgba(16,185,129,0.3))",border:"1px solid rgba(16,185,129,0.4)",display:"flex",alignItems:"center",justifyContent:"center",margin:"0 auto 18px",boxShadow:"0 0 40px rgba(16,185,129,0.3)",animation:"coopPulse 3s ease-in-out infinite"}}>
@@ -2018,7 +2054,7 @@ export default function CoupleSpace() {
         <div style={{padding:"52px 22px 110px",position:"relative",zIndex:1}}>
           <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:20}}>
             <div>
-              <button style={{...S.backBtn,color:"rgba(245,158,11,0.5)"}} onClick={()=>goTo(SCREENS.HOME)}>← back</button>
+              <button style={{...S.backBtn,color:"rgba(245,158,11,0.5)"}} onClick={()=>goTo(SCREENS.LOGIN)}>← spaces</button>
               <h2 style={{fontFamily:"'Cormorant Garamond',serif",color:"#FFFFFF",fontSize:26,fontWeight:300,marginTop:4}}>
                 Personal <em style={{color:"#F59E0B"}}>Vault</em>
               </h2>
@@ -2405,6 +2441,7 @@ export default function CoupleSpace() {
         )}
 
         <div style={{padding:"52px 22px 110px",position:"relative",zIndex:1}}>
+          <button style={{...S.backBtn,color:"rgba(96,165,250,0.5)",marginBottom:8}} onClick={()=>goTo(SCREENS.LOGIN)}>← spaces</button>
           {/* Header */}
           <div className="f1" style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:24}}>
             <div>
