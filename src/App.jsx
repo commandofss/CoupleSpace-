@@ -118,34 +118,24 @@ const decodeJwtPayload = (jwt) => {
   } catch { return null; }
 };
 
-// Call Enoki to derive the Sui zkLogin address for a given JWT + salt
-const fetchZkLoginAddress = async (jwt, salt) => {
+// Call Enoki's "Get address for zkLogin user" endpoint — returns both the
+// derived Sui address AND the per-user salt in a single GET request.
+// (The old separate /zklogin/salt endpoint no longer exists — Enoki's
+// current API combines both into GET /v1/zklogin.)
+const fetchZkLoginUser = async (jwt) => {
   const res = await fetch(`${ENOKI_BASE}/zklogin`, {
-    method: "POST",
-    headers: {
-      "Content-Type":  "application/json",
-      "zklogin-jwt":   jwt,
-      "Authorization": `Bearer ${ENOKI_API_KEY}`,
-    },
-    body: JSON.stringify({ jwt, salt }),
-  });
-  if (!res.ok) throw new Error(`Enoki error ${res.status}`);
-  const data = await res.json();
-  return data.data?.address ?? null;
-};
-
-// Fetch or create a per-user salt from Enoki (tied to the sub claim in the JWT)
-const fetchOrCreateSalt = async (jwt) => {
-  const res = await fetch(`${ENOKI_BASE}/zklogin/salt`, {
     method: "GET",
     headers: {
       "Authorization": `Bearer ${ENOKI_API_KEY}`,
       "zklogin-jwt":   jwt,
     },
   });
-  if (!res.ok) throw new Error(`Salt error ${res.status}`);
+  if (!res.ok) throw new Error(`Enoki error ${res.status}`);
   const data = await res.json();
-  return data.data?.salt ?? null;
+  return {
+    address: data.data?.address ?? null,
+    salt:    data.data?.salt ?? null,
+  };
 };
 
 const Stars = () => {
@@ -410,8 +400,7 @@ export default function CoupleSpace() {
 
     (async () => {
       try {
-        const salt    = await fetchOrCreateSalt(idToken);
-        const address = await fetchZkLoginAddress(idToken, salt);
+        const { address, salt } = await fetchZkLoginUser(idToken);
         const user    = {
           address,
           salt,
@@ -1246,7 +1235,7 @@ export default function CoupleSpace() {
           <p style={S.cardEyebrow}>Partner's Sui address</p>
           <input style={S.input} placeholder="0x... (their wallet address)" value={addressInput} onChange={e=>setAddressInput(e.target.value)}/>
           <input style={{...S.input,marginTop:12}} placeholder="Partner's name (e.g. Amaka)" value={partnerName} onChange={e=>setPartnerName(e.target.value)}/>
-          <p style={{fontFamily:"'DM Sans',sans-serif",color:"rgba(29,155,240,0.35)",fontSize:11,marginTop:8,lineHeight:1.6}}>Enter both fields. Once connected, your Savings Pool opens on-chain — forever.</p>
+          <p style={{fontFamily:"'DM Sans',sans-serif",color:"rgba(29,155,240,0.35)",fontSize:11,marginTop:8,lineHeight:1.6}}>Both fields required. Once connected, your Savings Pool opens on-chain — forever.</p>
           <button style={{...S.primaryBtn,marginTop:16,opacity:(addressInput.length>10&&partnerName.length>1)?1:0.4}}
             onClick={()=>{
               if(addressInput.length>10 && partnerName.length>1){
