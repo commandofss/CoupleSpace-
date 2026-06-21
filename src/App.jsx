@@ -1,6 +1,7 @@
 import { useState, useEffect, useRef } from "react";
 import { supabase, BUCKETS, uploadToBucket } from "./lib/supabaseClient";
 import { txContributeCoupleVault, client } from "./lib/contracts";
+import { useEnokiFlow, useZkLoginSession } from "@mysten/enoki/react";
 
 /* ══════════════════════════════════════════════════════════
    CoupleSpace Final — Complete App
@@ -384,43 +385,18 @@ export default function CoupleSpace() {
     triggerType:"amount", triggerValue:"", destinationWallet:"",
   });
 
-  /* ── Handle OAuth redirect (Enoki/Google callback) ── */
+  /* ── Handle OAuth redirect (EnokiFlow callback) ── */
   useEffect(()=>{
-    const idToken = parseIdTokenFromHash();
-    if (!idToken) return; // not an OAuth redirect, normal app load
-
-    // Clear the hash so it doesn't pollute the URL
-    window.history.replaceState(null, "", window.location.pathname);
-
-    const storedNonce = sessionStorage.getItem("cs_oauth_nonce");
-    const payload = decodeJwtPayload(idToken);
-    if (!payload) { setZkError("Invalid sign-in response. Please try again."); return; }
+    if (!window.location.hash.includes("id_token")) return; // not an OAuth redirect
 
     setZkLoading(true);
     setScreen(SCREENS.ZKLOGIN);
 
     (async () => {
       try {
-        const { address, salt } = await fetchZkLoginUser(idToken);
-        const user    = {
-          address,
-          salt,
-          jwt:     idToken,
-          email:   payload.email   ?? "",
-          name:    payload.name    ?? "",
-          picture: payload.picture ?? "",
-        };
-        setZkUser(user);
-        sessionStorage.setItem("cs_user", JSON.stringify(user));
-        // If they already set a name, skip SETUP; go straight to LOGIN (space picker)
-        const savedName = localStorage.getItem("cs_myName");
-        if (savedName) {
-          setMyName(savedName);
-          setNameInput(savedName);
-          goTo(SCREENS.LOGIN);
-        } else {
-          goTo(SCREENS.SETUP);
-        }
+        await enokiFlow.handleAuthCallback();
+        window.history.replaceState(null, "", window.location.pathname);
+        setZkLoading(false);
       } catch(e) {
         setZkError("Could not verify sign-in. Please try again.");
         setZkLoading(false);
@@ -429,19 +405,28 @@ export default function CoupleSpace() {
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
-  /* ── Restore session from sessionStorage on app load ── */
+  /* ── Sync zkUser from the EnokiFlow session whenever it changes ── */
   useEffect(()=>{
-    const saved = sessionStorage.getItem("cs_user");
-    const savedName = localStorage.getItem("cs_myName");
-    if (saved && !zkUser) {
-      try {
-        const user = JSON.parse(saved);
-        setZkUser(user);
-        if (savedName) { setMyName(savedName); setNameInput(savedName); }
-      } catch {}
+    if (zkSession?.address) {
+      const user = {
+        address: zkSession.address,
+        jwt:     zkSession.jwt ?? "",
+        email:   zkSession.claims?.email   ?? "",
+        name:    zkSession.claims?.name    ?? "",
+        picture: zkSession.claims?.picture ?? "",
+      };
+      setZkUser(user);
+      const savedName = localStorage.getItem("cs_myName");
+      if (savedName) {
+        setMyName(savedName);
+        setNameInput(savedName);
+        if (screen === SCREENS.ZKLOGIN) goTo(SCREENS.LOGIN);
+      } else if (screen === SCREENS.ZKLOGIN) {
+        goTo(SCREENS.SETUP);
+      }
     }
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []);
+  }, [zkSession]);
 
   /* Splash */
   useEffect(()=>{
@@ -473,22 +458,37 @@ export default function CoupleSpace() {
     if(s===SCREENS.CIRCLE_CHAT)   { setAppMode("circle"); }
   };
 
-  const signOut = () => {
-    sessionStorage.removeItem("cs_user");
-    localStorage.removeItem("cs_myName");
-    setZkUser(null);
-    setMyName("");
-    setNameInput("");
-    setPartnerAddress("");
-    setZkError("");
-    goTo(SCREENS.ZKLOGIN);
-  };
+  const signOut = async () => {
+  try {
+    await enokiFlow.logout();
+  } catch (e) {
+    console.warn("[CoupleSpace] enokiFlow.logout() failed:", e.message || e);
+  }
+  localStorage.removeItem("cs_myName");
+  setZkUser(null);
+  setMyName("");
+  setNameInput("");
+  setPartnerAddress("");
+  setZkError("");
+  goTo(SCREENS.ZKLOGIN);
+};
 
-  const handleGoogleSignIn = () => {
+  const enokiFlow = useEnokiFlow();
+  const zkSession = useZkLoginSession();
+
+  const handleGoogleSignIn = async () => {
     setZkError("");
-    const nonce = generateNonce();
-    sessionStorage.setItem("cs_oauth_nonce", nonce);
-    window.location.href = buildGoogleOAuthUrl(nonce);
+    try {
+      const url = await enokiFlow.createAuthorizationURL({
+        provider: "google",
+        clientId: GOOGLE_CLIENT_ID,
+        redirectUrl: window.location.origin + window.location.pathname,
+        network: "testnet",
+      });
+      window.location.href = url;
+    } catch (e) {
+      setZkError("Could not start sign-in. Please try again.");
+    }
   };
 
   /* ── Wallet handlers ── */
