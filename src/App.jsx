@@ -429,14 +429,14 @@ export default function CoupleSpace() {
   }, [zkSession]);
 
   /* Splash */
-  useEffect(()=>{
+  useEffect(()=>{)
     // Don't run splash if we're already handling an OAuth redirect
     if (parseIdTokenFromHash()) return;
-    if(screen===SCREENS.SPLASH){
+    if (screen === SCREENS.SPLASH){
       const t1=setTimeout(()=>setSplashStage(1),600);
       const t2=setTimeout(()=>setSplashStage(2),1400);
       const t3=setTimeout(()=>setScreen(SCREENS.ZKLOGIN),3000);
-      return()=>{clearTimeout(t1);clearTimeout(t2);clearTimeout(t3);}
+      return ()=> {clearTimeout(t1);clearTimeout(t2);clearTimeout(t3);}
     }
   },[screen]);
 

@@ -14,7 +14,6 @@ const networks = {
   testnet: { url: getJsonRpcFullnodeUrl('testnet') },
 }
 
-// Public Enoki key — safe to expose in the browser
 const ENOKI_PUBLIC_KEY = "enoki_public_81f69efa32009bbcc144f8f4a0a02219";
 
 createRoot(document.getElementById('root')).render(
