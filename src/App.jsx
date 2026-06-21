@@ -1,5 +1,6 @@
 import { useState, useEffect, useRef } from "react";
 import { supabase, BUCKETS, uploadToBucket } from "./lib/supabaseClient";
+import { txContributeCoupleVault, client } from "./lib/contracts";
 
 /* ══════════════════════════════════════════════════════════
    CoupleSpace Final — Complete App
@@ -786,12 +787,26 @@ export default function CoupleSpace() {
 
 
   /* Savings */
-  const handleContribute=()=>{
-    const amt=parseFloat(contribAmount);
-    if(!amt||amt<=0) return;
-    setGoals(prev=>prev.map(g=>{
-      if(g.id!==activeGoal.id) return g;
-      const updated={...g,saved:g.saved+amt,myContrib:g.myContrib+amt};
+  const handleContribute = async () => {
+    const amt = parseFloat(contribAmount);
+    if (!amt || amt <= 0) return;
+
+    if (activeGoal.vaultId && zkUser?.jwt) {
+      try {
+        const amountMist = Math.round(amt * 1_000_000_000);
+        const tx = txContributeCoupleVault({
+          vaultId: activeGoal.vaultId,
+          amount: amountMist,
+        });
+        await client.executeTransactionBlock({ transactionBlock: tx });
+      } catch (e) {
+        console.warn("On-chain contribute failed:", e.message);
+      }
+    }
+
+    setGoals(prev => prev.map(g => {
+      if (g.id !== activeGoal.id) return g;
+      const updated = { ...g, saved: g.saved + amt, myContrib: g.myContrib + amt };
       setActiveGoal(updated);
       return updated;
     }));
