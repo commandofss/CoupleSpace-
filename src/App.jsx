@@ -1,4 +1,4 @@
- import { useState, useEffect, useRef } from "react";
+import { useState, useEffect, useRef } from "react";
 import { supabase, BUCKETS, uploadToBucket } from "./lib/supabaseClient";
 import { txContributeCoupleVault, client } from "./lib/contracts";
 import { useEnokiFlow, useZkLoginSession } from "@mysten/enoki/react";
@@ -283,6 +283,10 @@ export default function CoupleSpace() {
   const [chatInput, setChatInput] = useState("");
   const chatEndRef = useRef(null);
 
+  // ── Enoki hooks (must be before any useEffect that uses them) ──
+  const enokiFlow = useEnokiFlow();
+  const zkSession = useZkLoginSession();
+
   useEffect(()=>{
     return ()=>{
       clearInterval(recordingTimerRef.current);
@@ -472,9 +476,6 @@ export default function CoupleSpace() {
   setZkError("");
   goTo(SCREENS.ZKLOGIN);
 };
-
-  const enokiFlow = useEnokiFlow();
-  const zkSession = useZkLoginSession();
 
   const handleGoogleSignIn = async () => {
     setZkError("");
