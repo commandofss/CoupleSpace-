@@ -392,7 +392,14 @@ export default function CoupleSpace() {
   /* ── Handle OAuth redirect (EnokiFlow callback) ── */
   useEffect(()=>{
     // Check if this is an OAuth redirect (Google sends id_token in hash)
-    if (!window.location.hash.includes("id_token")) return;
+    console.log("[CoupleSpace] Checking for OAuth redirect...");
+    console.log("[CoupleSpace] Current hash:", window.location.hash);
+    console.log("[CoupleSpace] Current URL:", window.location.href);
+
+    if (!window.location.hash.includes("id_token")) {
+      console.log("[CoupleSpace] No id_token in hash, skipping OAuth handling");
+      return;
+    }
 
     console.log("[CoupleSpace] OAuth redirect detected, processing...");
     setZkLoading(true);
@@ -400,41 +407,23 @@ export default function CoupleSpace() {
 
     (async () => {
       try {
-        // Retrieve stored ephemeral state
-        const storedState = JSON.parse(sessionStorage.getItem('enokiLoginState') || '{}');
-
-        if (!storedState.ephemeralPublicKey) {
-          console.warn("[CoupleSpace] No ephemeral state found, trying direct callback...");
-        }
-
-        // Try Enoki's built-in handler first
+        // Enoki handles ephemeral keys internally - no manual sessionStorage needed
+        console.log("[CoupleSpace] Calling handleAuthCallback...");
         await enokiFlow.handleAuthCallback();
         console.log("[CoupleSpace] handleAuthCallback succeeded");
 
-        // Wait for Enoki to process the session
-        await new Promise(resolve => setTimeout(resolve, 1000));
-
-        // Check if we have a valid session now
-        if (zkSession?.address) {
-          console.log("[CoupleSpace] Session detected, navigating...");
-          const savedName = localStorage.getItem("cs_myName");
-          if (savedName) {
-            setMyName(savedName);
-            setNameInput(savedName);
-            goTo(SCREENS.LOGIN);
-          } else {
-            goTo(SCREENS.SETUP);
-          }
-        } else {
-          console.log("[CoupleSpace] No session detected after callback, waiting for sync effect...");
-        }
-      } catch(e) {
-        console.warn("[CoupleSpace] handleAuthCallback failed:", e);
-        setZkError("Could not verify sign-in. " + (e.message || "Please try again."));
-      } finally {
-        // Always clear the hash to prevent re-processing and infinite loops
+        // Clear the hash to prevent re-processing
         window.history.replaceState(null, "", window.location.pathname);
-        sessionStorage.removeItem('enokiLoginState'); // Clean up
+
+        // The sync useEffect [zkSession] will handle navigation
+        // when zkSession updates with the new user data
+        console.log("[CoupleSpace] Waiting for zkSession update...");
+      } catch(e) {
+        console.error("[CoupleSpace] handleAuthCallback failed:", e);
+        console.error("[CoupleSpace] Error details:", e.message, e.stack);
+        setZkError("Could not verify sign-in. " + (e.message || "Please try again."));
+        // Clear the hash to prevent infinite loop
+        window.history.replaceState(null, "", window.location.pathname);
         setZkLoading(false);
       }
     })();
@@ -518,37 +507,18 @@ export default function CoupleSpace() {
   const handleGoogleSignIn = async () => {
     setZkError("");
     try {
-      // Generate ephemeral keypair for zkLogin (required by Sui zkLogin protocol)
-      const { Ed25519Keypair } = await import('@mysten/sui/keypairs/ed25519');
-      const { generateRandomness, generateNonce } = await import('@mysten/sui/zklogin');
-
-      const keypair = new Ed25519Keypair();
-      const ephemeralPublicKey = keypair.getPublicKey();
-      const ephemeralPrivateKey = keypair.getSecretKey();
-      const randomness = generateRandomness();
-
-      // Store ephemeral state in sessionStorage for retrieval after redirect
-      const loginState = {
-        ephemeralPublicKey: ephemeralPublicKey.toBase64(),
-        ephemeralPrivateKey,
-        randomness,
-        provider: 'google',
-      };
-      sessionStorage.setItem('enokiLoginState', JSON.stringify(loginState));
-
-      // Generate nonce from ephemeral key (required for zkLogin)
-      const maxEpoch = 10; // Use a reasonable max epoch
-      const nonce = generateNonce(ephemeralPublicKey, maxEpoch, randomness);
-
-      console.log("[CoupleSpace] Generated ephemeral keys and nonce for zkLogin");
+      // Use Enoki's built-in flow - handles ephemeral keys internally
+      console.log("[CoupleSpace] Starting Enoki Google sign-in...");
+      console.log("[CoupleSpace] Redirect URL:", window.location.origin + window.location.pathname);
 
       const url = await enokiFlow.createAuthorizationURL({
         provider: "google",
         clientId: GOOGLE_CLIENT_ID,
         redirectUrl: window.location.origin + window.location.pathname,
         network: "testnet",
-        extraParams: { nonce }, // Pass the nonce to Enoki
       });
+
+      console.log("[CoupleSpace] Auth URL generated, redirecting to Google...");
       window.location.href = url;
     } catch (e) {
       console.error("[CoupleSpace] Failed to start sign-in:", e);
