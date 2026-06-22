@@ -1,4 +1,4 @@
-import { useState, useEffect, useRef } from "react";
+ import { useState, useEffect, useRef } from "react";
 import { supabase, BUCKETS, uploadToBucket } from "./lib/supabaseClient";
 import { txContributeCoupleVault, client } from "./lib/contracts";
 import { useEnokiFlow, useZkLoginSession } from "@mysten/enoki/react";
@@ -429,7 +429,7 @@ export default function CoupleSpace() {
   }, [zkSession]);
 
   /* Splash */
-  useEffect(()=>{)
+  useEffect(()=>{
     // Don't run splash if we're already handling an OAuth redirect
     if (parseIdTokenFromHash()) return;
     if (screen === SCREENS.SPLASH){
