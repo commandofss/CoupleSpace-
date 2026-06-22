@@ -22,7 +22,7 @@ const FontLink = () => (
     @keyframes heartbeat { 0%,100%{transform:scale(1)} 14%{transform:scale(1.18)} 28%{transform:scale(1)} 42%{transform:scale(1.1)} 56%{transform:scale(1)} }
     @keyframes orbit     { from{transform:rotate(0deg) translateX(54px) rotate(0deg)} to{transform:rotate(360deg) translateX(54px) rotate(-360deg)} }
     @keyframes blink     { 0%,100%{opacity:0.3} 50%{opacity:1} }
-    @keyframes ripple    { 0%{transform:scale(0.95);opacity:0.7} 100%{transform:scale(1.6);opacity:0}} }
+    @keyframes ripple    { 0%{transform:scale(0.95);opacity:0.7} 100%{transform:scale(1.6);opacity:0} }
     @keyframes starTwinkle { 0%,100%{opacity:0.15;transform:scale(1)} 50%{opacity:0.9;transform:scale(1.4)} }
     @keyframes coopPulse { 0%,100%{box-shadow:0 0 24px rgba(16,185,129,0.25)} 50%{box-shadow:0 0 48px rgba(16,185,129,0.55)} }
     .f1 { animation: floatUp 0.55s ease forwards; }
@@ -391,18 +391,50 @@ export default function CoupleSpace() {
 
   /* ── Handle OAuth redirect (EnokiFlow callback) ── */
   useEffect(()=>{
-    if (!window.location.hash.includes("id_token")) return; // not an OAuth redirect
+    // Check if this is an OAuth redirect (Google sends id_token in hash)
+    if (!window.location.hash.includes("id_token")) return;
 
+    console.log("[CoupleSpace] OAuth redirect detected, processing...");
     setZkLoading(true);
     setScreen(SCREENS.ZKLOGIN);
 
     (async () => {
       try {
+        // Retrieve stored ephemeral state
+        const storedState = JSON.parse(sessionStorage.getItem('enokiLoginState') || '{}');
+
+        if (!storedState.ephemeralPublicKey) {
+          console.warn("[CoupleSpace] No ephemeral state found, trying direct callback...");
+        }
+
+        // Try Enoki's built-in handler first
         await enokiFlow.handleAuthCallback();
-        window.history.replaceState(null, "", window.location.pathname);
-        setZkLoading(false);
+        console.log("[CoupleSpace] handleAuthCallback succeeded");
+
+        // Wait for Enoki to process the session
+        await new Promise(resolve => setTimeout(resolve, 1000));
+
+        // Check if we have a valid session now
+        if (zkSession?.address) {
+          console.log("[CoupleSpace] Session detected, navigating...");
+          const savedName = localStorage.getItem("cs_myName");
+          if (savedName) {
+            setMyName(savedName);
+            setNameInput(savedName);
+            goTo(SCREENS.LOGIN);
+          } else {
+            goTo(SCREENS.SETUP);
+          }
+        } else {
+          console.log("[CoupleSpace] No session detected after callback, waiting for sync effect...");
+        }
       } catch(e) {
-        setZkError("Could not verify sign-in. Please try again.");
+        console.warn("[CoupleSpace] handleAuthCallback failed:", e);
+        setZkError("Could not verify sign-in. " + (e.message || "Please try again."));
+      } finally {
+        // Always clear the hash to prevent re-processing and infinite loops
+        window.history.replaceState(null, "", window.location.pathname);
+        sessionStorage.removeItem('enokiLoginState'); // Clean up
         setZkLoading(false);
       }
     })();
@@ -411,6 +443,8 @@ export default function CoupleSpace() {
 
   /* ── Sync zkUser from the EnokiFlow session whenever it changes ── */
   useEffect(()=>{
+    console.log("[CoupleSpace] zkSession changed:", zkSession ? "has session" : "null", "address:", zkSession?.address);
+
     if (zkSession?.address) {
       const user = {
         address: zkSession.address,
@@ -420,12 +454,16 @@ export default function CoupleSpace() {
         picture: zkSession.claims?.picture ?? "",
       };
       setZkUser(user);
+      console.log("[CoupleSpace] Set zkUser:", user.email, user.name);
+
       const savedName = localStorage.getItem("cs_myName");
       if (savedName) {
         setMyName(savedName);
         setNameInput(savedName);
+        console.log("[CoupleSpace] Found saved name, navigating to LOGIN");
         if (screen === SCREENS.ZKLOGIN) goTo(SCREENS.LOGIN);
       } else if (screen === SCREENS.ZKLOGIN) {
+        console.log("[CoupleSpace] No saved name, navigating to SETUP");
         goTo(SCREENS.SETUP);
       }
     }
@@ -434,8 +472,8 @@ export default function CoupleSpace() {
 
   /* Splash */
   useEffect(()=>{
-    // Don't run splash if we're already handling an OAuth redirect
-    if (parseIdTokenFromHash()) return;
+    // Don't run splash timers if we're on ZKLOGIN (OAuth in progress)
+    if (screen === SCREENS.ZKLOGIN) return;
     if (screen === SCREENS.SPLASH){
       const t1=setTimeout(()=>setSplashStage(1),600);
       const t2=setTimeout(()=>setSplashStage(2),1400);
@@ -480,15 +518,41 @@ export default function CoupleSpace() {
   const handleGoogleSignIn = async () => {
     setZkError("");
     try {
+      // Generate ephemeral keypair for zkLogin (required by Sui zkLogin protocol)
+      const { Ed25519Keypair } = await import('@mysten/sui/keypairs/ed25519');
+      const { generateRandomness, generateNonce } = await import('@mysten/sui/zklogin');
+
+      const keypair = new Ed25519Keypair();
+      const ephemeralPublicKey = keypair.getPublicKey();
+      const ephemeralPrivateKey = keypair.getSecretKey();
+      const randomness = generateRandomness();
+
+      // Store ephemeral state in sessionStorage for retrieval after redirect
+      const loginState = {
+        ephemeralPublicKey: ephemeralPublicKey.toBase64(),
+        ephemeralPrivateKey,
+        randomness,
+        provider: 'google',
+      };
+      sessionStorage.setItem('enokiLoginState', JSON.stringify(loginState));
+
+      // Generate nonce from ephemeral key (required for zkLogin)
+      const maxEpoch = 10; // Use a reasonable max epoch
+      const nonce = generateNonce(ephemeralPublicKey, maxEpoch, randomness);
+
+      console.log("[CoupleSpace] Generated ephemeral keys and nonce for zkLogin");
+
       const url = await enokiFlow.createAuthorizationURL({
         provider: "google",
         clientId: GOOGLE_CLIENT_ID,
         redirectUrl: window.location.origin + window.location.pathname,
         network: "testnet",
+        extraParams: { nonce }, // Pass the nonce to Enoki
       });
       window.location.href = url;
     } catch (e) {
-      setZkError("Could not start sign-in. Please try again.");
+      console.error("[CoupleSpace] Failed to start sign-in:", e);
+      setZkError("Could not start sign-in. " + (e.message || "Please try again."));
     }
   };
 
