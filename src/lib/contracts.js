@@ -9,15 +9,14 @@ export const PACKAGE_ID =
   "0xc238fad3b2aff0808fad37ec6d653bf85f6f1ca529cc47ff5a6b51fd09b72f3e";
 
 // ══════════════════════════════════════════════════════
-// Transaction builders — these only BUILD the tx, they
-// don't sign or submit it. Signing/submitting happens via
-// signAndExecute() below, which talks to our backend.
+// Transaction builders — these only BUILD the tx.
+// Signing/submitting happens via enokiFlow in App.jsx.
 // ══════════════════════════════════════════════════════
 
 export function txCreateCoupleVault({
   partnerB,
   target,
-  triggerType, // 0 = percent, 1 = date
+  triggerType,
   triggerValue,
   label,
   destination,
@@ -64,45 +63,21 @@ export function txReleaseCoupleVault({ vaultId, treasuryId, clockId }) {
 }
 
 // ══════════════════════════════════════════════════════
-// signAndExecute — the bridge to our backend.
-// Takes a built Transaction + the signed-in zkUser,
-// asks our /api/sponsor and /api/execute routes to do
-// the actual signing/submission via Enoki.
+// executeWithEnoki — uses enokiFlow to sponsor, sign,
+// and execute the transaction in one call.
 // ══════════════════════════════════════════════════════
 
-export async function signAndExecute(tx, zkUser) {
-  if (!zkUser?.address || !zkUser?.jwt) {
-    throw new Error("Not signed in — missing zkLogin session");
+export async function executeWithEnoki(tx, enokiFlow) {
+  if (!enokiFlow) {
+    throw new Error("enokiFlow not available — user not signed in");
   }
 
-  // 1. Build the transaction kind bytes (unsigned)
-  const txBytes = await tx.build({ client, onlyTransactionKind: true });
-  const txBytesBase64 = btoa(String.fromCharCode(...txBytes));
-
-  // 2. Ask our backend to sponsor it via Enoki
-  const sponsorRes = await fetch("/api/sponsor", {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({
-      network: "testnet",
-      sender: zkUser.address,
-      transactionKindBytes: txBytesBase64,
-    }),
+  const result = await enokiFlow.sponsorAndExecuteTransaction({
+    transaction: tx,
+    network: "testnet",
   });
-  if (!sponsorRes.ok) {
-    const err = await sponsorRes.text();
-    throw new Error(`Sponsor failed: ${err}`);
-  }
-  const sponsored = await sponsorRes.json();
-  // sponsored = { digest, bytes }
 
-  // 3. Sign the sponsored transaction with zkLogin
-  //    (Enoki's flow signs using the ephemeral key + zk proof
-  //     tied to the user's JWT — this step uses the Enoki SDK
-  //     on the frontend, see EnokiFlow usage in App.jsx)
-  // NOTE: actual signing happens in App.jsx via useEnokiFlow()
-  //       this function just returns the sponsored digest for now
-  return sponsored;
+  return result;
 }
 
 // ── Fetch couple vault data ──

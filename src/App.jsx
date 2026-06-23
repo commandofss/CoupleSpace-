@@ -1,14 +1,15 @@
 import { useState, useEffect, useRef } from "react";
 import { supabase, BUCKETS, uploadToBucket } from "./lib/supabaseClient";
-import { txContributeCoupleVault, client } from "./lib/contracts";
+import { txContributeCoupleVault, txCreateCoupleVault, executeWithEnoki, client } from "./lib/contracts";
 import { useEnokiFlow, useZkLoginSession } from "@mysten/enoki/react";
 
 /* ══════════════════════════════════════════════════════════
-   CoupleSpace Final — Complete App
-   • Couple Savings Pool (4 rules)
-   • Circle/Ajo Cooperative (5 rules)
-   • 2% protocol fee on all payouts
-   • Simple, straightforward UI
+   CoupleSpace — Sui Flow 2026 Hackathon Submission
+   • Couple Savings Pool (on-chain via couple_vault.move)
+   • Circle/Ajo Cooperative (on-chain via savings_circle.move)
+   • Personal Vault (on-chain via personal_vault.move)
+   • 2% protocol fee (on-chain via protocol_fee.move)
+   • zkLogin auth via Enoki
 ══════════════════════════════════════════════════════════ */
 
 const FontLink = () => (
@@ -48,96 +49,20 @@ const SCREENS = {
   CIRCLE_LOGIN:"circle_login", CIRCLE_REGISTER:"circle_register", CIRCLE_PORTAL:"circle_portal", CIRCLE_CHAT:"circle_chat",
 };
 
-/* ══════════════════════════════════════════════════════════
-   zkLogin / Enoki helpers
-   ─────────────────────────────────────────────────────────
-   In production, replace ENOKI_API_KEY with your real key
-   from https://portal.enoki.mystenlabs.com
-   and set your Google OAuth Client ID below.
-   The deriveSuiAddress utility is a lightweight reimplementation
-   of the on-chain logic so we don't need the full SDK at runtime.
-══════════════════════════════════════════════════════════ */
 const ENOKI_API_KEY   = "enoki_public_81f69efa32009bbcc144f8f4a0a02219";
 const GOOGLE_CLIENT_ID = "822140699935-sqni61tg3nlbvp4sdvaq5jpmmq3k5vav.apps.googleusercontent.com";
 const ENOKI_BASE      = "https://api.enoki.mystenlabs.com/v1";
 
-// Deterministically shorten an address for display
 const shortAddr = (addr) => addr ? `${addr.slice(0,6)}…${addr.slice(-4)}` : "";
-
-// Normalize a wallet address for storage/comparison: trim whitespace and
-// lowercase. Sui addresses are hex strings, so case differences should
-// never represent different addresses — but inconsistent casing would
-// otherwise cause vault lookups to silently miss/duplicate.
 const normalizeAddress = (addr) => (addr || "").trim().toLowerCase();
-
-// Order a pair of addresses canonically (alphabetical) so the same couple
-// always maps to one `vaults` row regardless of who set up the vault.
-// Returns [partner_a, partner_b] both normalized.
 const canonicalPair = (addrA, addrB) => {
   const a = normalizeAddress(addrA);
   const b = normalizeAddress(addrB);
   return a <= b ? [a, b] : [b, a];
 };
-
-// Copy to clipboard helper
 const copyToClipboard = async (text) => {
   try { await navigator.clipboard.writeText(text); return true; }
   catch { return false; }
-};
-
-// Generate a random nonce for the OAuth flow (stored in sessionStorage)
-const generateNonce = () => {
-  const arr = new Uint8Array(16);
-  crypto.getRandomValues(arr);
-  return Array.from(arr, b => b.toString(16).padStart(2,"0")).join("");
-};
-
-// Build the Google OAuth URL pointing to Enoki's zkLogin endpoint
-const buildGoogleOAuthUrl = (nonce) => {
-  const params = new URLSearchParams({
-    client_id:     GOOGLE_CLIENT_ID,
-    redirect_uri:  window.location.origin + window.location.pathname,
-    response_type: "id_token",
-    scope:         "openid email profile",
-    nonce,
-    prompt:        "select_account",
-  });
-  return `https://accounts.google.com/o/oauth2/v2/auth?${params}`;
-};
-
-// Parse id_token from URL hash fragment (after OAuth redirect)
-const parseIdTokenFromHash = () => {
-  const hash = window.location.hash.slice(1);
-  const params = new URLSearchParams(hash);
-  return params.get("id_token") || null;
-};
-
-// Decode JWT payload without verification (verification happens on Enoki's server)
-const decodeJwtPayload = (jwt) => {
-  try {
-    const base64 = jwt.split(".")[1].replace(/-/g,"+").replace(/_/g,"/");
-    return JSON.parse(atob(base64));
-  } catch { return null; }
-};
-
-// Call Enoki's "Get address for zkLogin user" endpoint — returns both the
-// derived Sui address AND the per-user salt in a single GET request.
-// (The old separate /zklogin/salt endpoint no longer exists — Enoki's
-// current API combines both into GET /v1/zklogin.)
-const fetchZkLoginUser = async (jwt) => {
-  const res = await fetch(`${ENOKI_BASE}/zklogin`, {
-    method: "GET",
-    headers: {
-      "Authorization": `Bearer ${ENOKI_API_KEY}`,
-      "zklogin-jwt":   jwt,
-    },
-  });
-  if (!res.ok) throw new Error(`Enoki error ${res.status}`);
-  const data = await res.json();
-  return {
-    address: data.data?.address ?? null,
-    salt:    data.data?.salt ?? null,
-  };
 };
 
 const Stars = () => {
@@ -183,7 +108,6 @@ const S = {
   quoteCard:{background:"rgba(29,155,240,0.07)",borderRadius:18,padding:"18px",border:"1px solid rgba(29,155,240,0.1)"},
 };
 
-/* ── Couple BottomNav (purple) ── */
 const BottomNav = ({activeTab, setActiveTab, goTo}) => {
   const tabs = [
     {icon:"💳",label:"Wallet",id:"wallet",screen:SCREENS.WALLET},
@@ -205,7 +129,6 @@ const BottomNav = ({activeTab, setActiveTab, goTo}) => {
   );
 };
 
-/* ── Circle BottomNav (green, completely separate) ── */
 const CircleNav = ({circleTab, setCircleTab, goTo}) => {
   const tabs = [
     {icon:"📊",label:"Pool",id:"pool"},
@@ -229,26 +152,26 @@ const CircleNav = ({circleTab, setCircleTab, goTo}) => {
 };
 
 export default function CoupleSpace() {
+  /* ══════════════════════════════════════════════════════════
+     ALL HOOKS FIRST — useState, useRef, useEnokiFlow, useZkLoginSession
+  ══════════════════════════════════════════════════════════ */
   const [screen, setScreen] = useState(SCREENS.SPLASH);
   const [splashStage, setSplashStage] = useState(0);
   const [activeTab, setActiveTab] = useState("home");
-  const [appMode, setAppMode] = useState("couple"); // "couple" | "circle"
+  const [appMode, setAppMode] = useState("couple");
   const [myName, setMyName] = useState("");
   const [partnerName, setPartnerName] = useState("");
   const [nameInput, setNameInput] = useState("");
   const [addressInput, setAddressInput] = useState("");
   const [partnerAddress, setPartnerAddress] = useState("");
 
-  // ── zkLogin state ──
-  const [zkUser, setZkUser]       = useState(null);   // { address, email, name, picture, jwt, salt }
+  const [zkUser, setZkUser]       = useState(null);
   const [zkLoading, setZkLoading] = useState(false);
   const [zkError, setZkError]     = useState("");
   const [copied, setCopied]       = useState(false);
 
-  // Derived: the real on-chain address (zkLogin or fallback placeholder)
   const myAddress = zkUser?.address ?? "0x0000…0000";
 
-  // ── Wallet state ──
   const [walletBalances, setWalletBalances] = useState({sui:12.45, usdc:340.00});
   const [walletTxns, setWalletTxns] = useState([
     {id:1,type:"received",token:"SUI", amount:10.00,  from:"0x4d7e…8f0a", date:"Jun 10, 2024",  note:"From Kofi"},
@@ -264,16 +187,8 @@ export default function CoupleSpace() {
   const [sendNote, setSendNote]                 = useState("");
   const [walletCopied, setWalletCopied]         = useState(false);
 
-  // ── Vault identity (Supabase) ──
-  // `vaultId` identifies the row in the `vaults` table for this couple,
-  // looked up/created from (myAddress, partnerAddress) once both are known.
-  // Messages and Memories are scoped to this id.
-  // TODO (next step): once myAddress + partnerAddress are set, look up or
-  // create the vault row, store its id here, then load message/memory
-  // history from Supabase instead of the seed data below.
   const [vaultId, setVaultId] = useState(null);
 
-  // Chat state
   const [messages, setMessages] = useState([
     {id:1,from:"her",type:"text",text:"Good morning love ☀️",time:"8:02 AM"},
     {id:2,from:"me",type:"text",text:"Morning beautiful 🌹",time:"8:04 AM"},
@@ -283,20 +198,12 @@ export default function CoupleSpace() {
   const [chatInput, setChatInput] = useState("");
   const chatEndRef = useRef(null);
 
-  // ── Enoki hooks (must be before any useEffect that uses them) ──
+  /* ── Enoki hooks — MUST be before any useEffect ── */
   const enokiFlow = useEnokiFlow();
   const zkSession = useZkLoginSession();
 
-  useEffect(()=>{
-    return ()=>{
-      clearInterval(recordingTimerRef.current);
-      recordingStreamRef.current?.getTracks().forEach(t=>t.stop());
-    };
-  },[]);
-
-  // ── Chat media: voice notes, files, video ──
   const [showAttachMenu, setShowAttachMenu] = useState(false);
-  const [recording, setRecording] = useState(null); // null | {type:"voice"|"video", seconds}
+  const [recording, setRecording] = useState(null);
   const fileInputRef   = useRef(null);
   const videoInputRef  = useRef(null);
   const imageInputRef  = useRef(null);
@@ -307,8 +214,6 @@ export default function CoupleSpace() {
   const recordingSecondsRef = useRef(0);
   const [mediaError, setMediaError] = useState("");
 
-
-  // Memories
   const [memories, setMemories] = useState([
     {id:1,label:"First Date 🌹",date:"Jan 14, 2024",type:"image",icon:"🖼️",color:"#7C3AED"},
     {id:2,label:"Lease Agreement",date:"Mar 2, 2024",type:"pdf",icon:"📄",color:"#0EA5E9"},
@@ -319,10 +224,9 @@ export default function CoupleSpace() {
   const [uploading, setUploading] = useState(false);
   const memoryFileInputRef = useRef(null);
 
-  // Savings Pool - Multiple Goals
   const [goals, setGoals] = useState([
-    {id:1,label:"Apartment Fund 🏠",token:"USDC",target:5000,saved:3400,myContrib:1800,partnerContrib:1600,myMonthlyCommit:300,partnerMonthlyCommit:300,myMisses:0,partnerMisses:0,releaseType:"percent",releaseValue:80,destinationWallet:"0x9f3a…2b1c",status:"active",createdDate:"2024-01-15"},
-    {id:2,label:"Vacation Fund 🌴",token:"USDC",target:2000,saved:800,myContrib:450,partnerContrib:350,myMonthlyCommit:150,partnerMonthlyCommit:150,myMisses:0,partnerMisses:0,releaseType:"date",releaseValue:"2024-12-25",destinationWallet:"0x4a2e…8c9f",status:"active",createdDate:"2024-03-01"},
+    {id:1,label:"Apartment Fund 🏠",token:"USDC",target:5000,saved:3400,myContrib:1800,partnerContrib:1600,myMonthlyCommit:300,partnerMonthlyCommit:300,myMisses:0,partnerMisses:0,releaseType:"percent",releaseValue:80,destinationWallet:"0x9f3a…2b1c",status:"active",createdDate:"2024-01-15",vaultId:null},
+    {id:2,label:"Vacation Fund 🌴",token:"USDC",target:2000,saved:800,myContrib:450,partnerContrib:350,myMonthlyCommit:150,partnerMonthlyCommit:150,myMisses:0,partnerMisses:0,releaseType:"date",releaseValue:"2024-12-25",destinationWallet:"0x4a2e…8c9f",status:"active",createdDate:"2024-03-01",vaultId:null},
   ]);
   const [activeGoal, setActiveGoal] = useState(goals[0]);
   const [showContributeModal, setShowContributeModal] = useState(false);
@@ -330,7 +234,6 @@ export default function CoupleSpace() {
   const [showCreateGoalModal, setShowCreateGoalModal] = useState(false);
   const [newGoal, setNewGoal] = useState({label:"",token:"USDC",target:"",releaseType:"percent",releaseValue:"80"});
 
-  // Circle state
   const [circles, setCircles] = useState([
     {id:1,name:"Sunrise Ajo",circleId:"CIRC-0x9f3a",size:6,contribution:100,token:"USDC",gracePeriod:3,createdDate:"2024-01-01",status:"active",members:[
       {addr:"0x9f3a…2b1c",name:"Amara K.",slot:1,paid:true,misses:0,received:false,stake:100},
@@ -351,78 +254,39 @@ export default function CoupleSpace() {
   const [circleChatInput, setCircleChatInput] = useState("");
   const circleChatEndRef = useRef(null);
   const [showCircleCreateModal, setShowCircleCreateModal] = useState(false);
-  // appMode ("couple"|"circle") handles section separation — inCoupleSection removed
   const [newCircle, setNewCircle] = useState({name:"",size:"6",contribution:"100",token:"USDC",gracePeriod:"3"});
 
-  // ── Personal Savings (fully private — partner cannot see) ──
   const [personalGoals, setPersonalGoals] = useState([
-    {
-      id:1, label:"Emergency Fund 🛡️", token:"USDC",
-      target:1000, saved:420,
-      triggerType:"amount",
-      triggerValue:"1000",
-      destinationWallet:"0x7a2d…f9c3",
-      status:"active",
-      createdDate:"2024-04-01",
-      contributions:[
-        {month:"Apr",amount:200},{month:"May",amount:120},{month:"Jun",amount:100},
-      ],
-    },
-    {
-      id:2, label:"MacBook Pro 💻", token:"USDC",
-      target:2500, saved:750,
-      triggerType:"date",
-      triggerValue:"2024-12-01",
-      destinationWallet:"0x7a2d…f9c3",
-      status:"active",
-      createdDate:"2024-05-10",
-      contributions:[
-        {month:"May",amount:500},{month:"Jun",amount:250},
-      ],
-    },
+    {id:1, label:"Emergency Fund 🛡️", token:"USDC", target:1000, saved:420, triggerType:"amount", triggerValue:"1000", destinationWallet:"0x7a2d…f9c3", status:"active", createdDate:"2024-04-01", contributions:[{month:"Apr",amount:200},{month:"May",amount:120},{month:"Jun",amount:100}]},
+    {id:2, label:"MacBook Pro 💻", token:"USDC", target:2500, saved:750, triggerType:"date", triggerValue:"2024-12-01", destinationWallet:"0x7a2d…f9c3", status:"active", createdDate:"2024-05-10", contributions:[{month:"May",amount:500},{month:"Jun",amount:250}]},
   ]);
   const [activePersonalGoal, setActivePersonalGoal] = useState(null);
   const [showPersonalContrib, setShowPersonalContrib] = useState(false);
   const [personalContribAmount, setPersonalContribAmount] = useState("");
-  const [newPersonalGoal, setNewPersonalGoal] = useState({
-    label:"", token:"USDC", target:"",
-    triggerType:"amount", triggerValue:"", destinationWallet:"",
-  });
+  const [newPersonalGoal, setNewPersonalGoal] = useState({label:"", token:"USDC", target:"", triggerType:"amount", triggerValue:"", destinationWallet:""});
 
-  /* ── Handle OAuth redirect (EnokiFlow callback) ── */
+  /* ══════════════════════════════════════════════════════════
+     ALL useEffect HOOKS — after all useState/useRef/useEnokiFlow
+  ══════════════════════════════════════════════════════════ */
+
   useEffect(()=>{
-    // Check if this is an OAuth redirect (Google sends id_token in hash)
-    console.log("[CoupleSpace] Checking for OAuth redirect...");
-    console.log("[CoupleSpace] Current hash:", window.location.hash);
-    console.log("[CoupleSpace] Current URL:", window.location.href);
+    return ()=>{
+      clearInterval(recordingTimerRef.current);
+      recordingStreamRef.current?.getTracks().forEach(t=>t.stop());
+    };
+  },[]);
 
-    if (!window.location.hash.includes("id_token")) {
-      console.log("[CoupleSpace] No id_token in hash, skipping OAuth handling");
-      return;
-    }
-
-    console.log("[CoupleSpace] OAuth redirect detected, processing...");
+  useEffect(()=>{
+    if (!window.location.hash.includes("id_token")) return;
     setZkLoading(true);
     setScreen(SCREENS.ZKLOGIN);
-
     (async () => {
       try {
-        // Enoki handles ephemeral keys internally - no manual sessionStorage needed
-        console.log("[CoupleSpace] Calling handleAuthCallback...");
         await enokiFlow.handleAuthCallback();
-        console.log("[CoupleSpace] handleAuthCallback succeeded");
-
-        // Clear the hash to prevent re-processing
         window.history.replaceState(null, "", window.location.pathname);
-
-        // The sync useEffect [zkSession] will handle navigation
-        // when zkSession updates with the new user data
-        console.log("[CoupleSpace] Waiting for zkSession update...");
+        setZkLoading(false);
       } catch(e) {
-        console.error("[CoupleSpace] handleAuthCallback failed:", e);
-        console.error("[CoupleSpace] Error details:", e.message, e.stack);
         setZkError("Could not verify sign-in. " + (e.message || "Please try again."));
-        // Clear the hash to prevent infinite loop
         window.history.replaceState(null, "", window.location.pathname);
         setZkLoading(false);
       }
@@ -430,10 +294,7 @@ export default function CoupleSpace() {
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
-  /* ── Sync zkUser from the EnokiFlow session whenever it changes ── */
   useEffect(()=>{
-    console.log("[CoupleSpace] zkSession changed:", zkSession ? "has session" : "null", "address:", zkSession?.address);
-
     if (zkSession?.address) {
       const user = {
         address: zkSession.address,
@@ -443,25 +304,19 @@ export default function CoupleSpace() {
         picture: zkSession.claims?.picture ?? "",
       };
       setZkUser(user);
-      console.log("[CoupleSpace] Set zkUser:", user.email, user.name);
-
       const savedName = localStorage.getItem("cs_myName");
       if (savedName) {
         setMyName(savedName);
         setNameInput(savedName);
-        console.log("[CoupleSpace] Found saved name, navigating to LOGIN");
         if (screen === SCREENS.ZKLOGIN) goTo(SCREENS.LOGIN);
       } else if (screen === SCREENS.ZKLOGIN) {
-        console.log("[CoupleSpace] No saved name, navigating to SETUP");
         goTo(SCREENS.SETUP);
       }
     }
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [zkSession]);
 
-  /* Splash */
   useEffect(()=>{
-    // Don't run splash timers if we're on ZKLOGIN (OAuth in progress)
     if (screen === SCREENS.ZKLOGIN) return;
     if (screen === SCREENS.SPLASH){
       const t1=setTimeout(()=>setSplashStage(1),600);
@@ -490,43 +345,31 @@ export default function CoupleSpace() {
   };
 
   const signOut = async () => {
-  try {
-    await enokiFlow.logout();
-  } catch (e) {
-    console.warn("[CoupleSpace] enokiFlow.logout() failed:", e.message || e);
-  }
-  localStorage.removeItem("cs_myName");
-  setZkUser(null);
-  setMyName("");
-  setNameInput("");
-  setPartnerAddress("");
-  setZkError("");
-  goTo(SCREENS.ZKLOGIN);
-};
+    try { await enokiFlow.logout(); } catch (e) {}
+    localStorage.removeItem("cs_myName");
+    setZkUser(null);
+    setMyName("");
+    setNameInput("");
+    setPartnerAddress("");
+    setZkError("");
+    goTo(SCREENS.ZKLOGIN);
+  };
 
   const handleGoogleSignIn = async () => {
     setZkError("");
     try {
-      // Use Enoki's built-in flow - handles ephemeral keys internally
-      console.log("[CoupleSpace] Starting Enoki Google sign-in...");
-      console.log("[CoupleSpace] Redirect URL:", window.location.origin + window.location.pathname);
-
       const url = await enokiFlow.createAuthorizationURL({
         provider: "google",
         clientId: GOOGLE_CLIENT_ID,
         redirectUrl: window.location.origin + window.location.pathname,
         network: "testnet",
       });
-
-      console.log("[CoupleSpace] Auth URL generated, redirecting to Google...");
       window.location.href = url;
     } catch (e) {
-      console.error("[CoupleSpace] Failed to start sign-in:", e);
       setZkError("Could not start sign-in. " + (e.message || "Please try again."));
     }
   };
 
-  /* ── Wallet handlers ── */
   const handleSend = () => {
     const amt = parseFloat(sendAmount);
     if (!amt || amt <= 0 || !sendAddress.trim()) return;
@@ -550,21 +393,17 @@ export default function CoupleSpace() {
     if (ok) { setWalletCopied(true); setTimeout(()=>setWalletCopied(false), 2000); }
   };
 
-  /* Chat */
   const nowTime = () => new Date().toLocaleTimeString([],{hour:"2-digit",minute:"2-digit"});
-
   const formatBytes=(bytes)=>{
     if(bytes<1024) return bytes+" B";
     if(bytes<1024*1024) return (bytes/1024).toFixed(1)+" KB";
     return (bytes/(1024*1024)).toFixed(1)+" MB";
   };
-
   const formatDuration=(sec)=>{
     const m=Math.floor(sec/60), s=Math.floor(sec%60);
     return `${m}:${s.toString().padStart(2,"0")}`;
   };
 
-  // Map a DB row (from `messages` table) to the shape the chat UI expects
   const rowToMessage = (row) => ({
     id: row.id,
     from: row.sender === normalizeAddress(myAddress) ? "me" : "her",
@@ -580,10 +419,6 @@ export default function CoupleSpace() {
     time: new Date(row.created_at).toLocaleTimeString([],{hour:"2-digit",minute:"2-digit"}),
   });
 
-  /* ── Look up or create the vault row for (myAddress, partnerAddress) ──
-     Addresses are normalized and ordered canonically so the same couple
-     always maps to exactly one row, regardless of who set up the vault
-     or how addresses were cased/whitespaced when entered. ── */
   const getOrCreateVault = async () => {
     if (!myAddress || !partnerAddress || myAddress.startsWith("0x0000")) return null;
     const [partnerA, partnerB] = canonicalPair(myAddress, partnerAddress);
@@ -596,15 +431,9 @@ export default function CoupleSpace() {
         .maybeSingle();
       if (findErr) throw findErr;
       if (existing) return existing.id;
-
       const { data: created, error: createErr } = await supabase
         .from("vaults")
-        .insert({
-          partner_a: partnerA,
-          partner_b: partnerB,
-          partner_a_name: myName || null,
-          partner_b_name: partnerName || null,
-        })
+        .insert({ partner_a: partnerA, partner_b: partnerB, partner_a_name: myName || null, partner_b_name: partnerName || null })
         .select()
         .single();
       if (createErr) throw createErr;
@@ -615,7 +444,6 @@ export default function CoupleSpace() {
     }
   };
 
-  /* ── Load message history for the vault ── */
   const loadMessages = async (vid) => {
     const { data, error } = await supabase
       .from("messages")
@@ -623,12 +451,9 @@ export default function CoupleSpace() {
       .eq("vault_id", vid)
       .order("created_at", { ascending: true });
     if (error) { console.warn("[CoupleSpace] loadMessages error:", error.message); return; }
-    if (data && data.length > 0) {
-      setMessages(data.map(rowToMessage));
-    }
+    if (data && data.length > 0) setMessages(data.map(rowToMessage));
   };
 
-  /* ── Set up vault + load history + realtime subscription ── */
   useEffect(() => {
     let channel;
     (async () => {
@@ -636,14 +461,12 @@ export default function CoupleSpace() {
       if (!vid) return;
       setVaultId(vid);
       await loadMessages(vid);
-
       channel = supabase
         .channel(`messages:${vid}`)
         .on("postgres_changes",
           { event: "INSERT", schema: "public", table: "messages", filter: `vault_id=eq.${vid}` },
           (payload) => {
             setMessages(prev => {
-              // Avoid duplicating a message we just inserted ourselves
               if (prev.some(m => m.id === payload.new.id)) return prev;
               return [...prev, rowToMessage(payload.new)];
             });
@@ -651,12 +474,10 @@ export default function CoupleSpace() {
         )
         .subscribe();
     })();
-
     return () => { if (channel) supabase.removeChannel(channel); };
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [myAddress, partnerAddress]);
 
-  /* ── Insert a message row into Supabase, returns the inserted row (or null) ── */
   const insertMessage = async (fields) => {
     if (!vaultId) return null;
     const { data, error } = await supabase
@@ -668,7 +489,6 @@ export default function CoupleSpace() {
     return data;
   };
 
-  /* ── Upload a File/Blob to the chat-media bucket, scoped to this vault ── */
   const uploadChatMedia = async (fileOrBlob, name) => {
     const safeName = (name || "file").replace(/[^\w.\-]+/g, "_");
     const path = `${vaultId || "unassigned"}/${Date.now()}_${safeName}`;
@@ -680,80 +500,62 @@ export default function CoupleSpace() {
     if(!chatInput.trim()) return;
     const text = chatInput.trim();
     setChatInput("");
-
-    // Optimistic local bubble
     const tempId = `temp-${Date.now()}`;
     setMessages(p=>[...p,{id:tempId,from:"me",type:"text",text,time:nowTime()}]);
-
     const saved = await insertMessage({ type:"text", text });
-    if (saved) {
-      setMessages(p => p.map(m => m.id===tempId ? rowToMessage(saved) : m));
-    }
+    if (saved) setMessages(p => p.map(m => m.id===tempId ? rowToMessage(saved) : m));
   };
 
-  /* ── Image attach ── */
   const handleImagePicked = async (e) => {
     const file = e.target.files?.[0];
     if(!file) return;
     setShowAttachMenu(false);
     e.target.value="";
-
     const tempId = `temp-${Date.now()}`;
     const previewUrl = URL.createObjectURL(file);
     setMessages(p=>[...p,{id:tempId,from:"me",type:"image",imageUrl:previewUrl,fileSize:file.size,time:nowTime(),pending:true}]);
-
     try {
       const { url } = await uploadChatMedia(file, file.name);
       const saved = await insertMessage({ type:"image", media_url:url, file_size:file.size, file_name:file.name });
       setMessages(p => p.map(m => m.id===tempId ? (saved ? rowToMessage(saved) : {...m, imageUrl:url, pending:false}) : m));
     } catch (err) {
-      console.warn("[CoupleSpace] image upload failed:", err.message || err);
       setMessages(p => p.map(m => m.id===tempId ? {...m, pending:false, failed:true} : m));
     }
   };
 
-  /* ── File attach ── */
   const handleFilePicked = async (e) => {
     const file = e.target.files?.[0];
     if(!file) return;
     setShowAttachMenu(false);
     e.target.value="";
-
     const tempId = `temp-${Date.now()}`;
     setMessages(p=>[...p,{id:tempId,from:"me",type:"file",fileName:file.name,fileSize:file.size,fileType:file.type,fileUrl:null,time:nowTime(),pending:true}]);
-
     try {
       const { url } = await uploadChatMedia(file, file.name);
       const saved = await insertMessage({ type:"file", media_url:url, file_name:file.name, file_size:file.size });
       setMessages(p => p.map(m => m.id===tempId ? (saved ? rowToMessage(saved) : {...m, fileUrl:url, pending:false}) : m));
     } catch (err) {
-      console.warn("[CoupleSpace] file upload failed:", err.message || err);
       setMessages(p => p.map(m => m.id===tempId ? {...m, pending:false, failed:true} : m));
     }
   };
 
-  /* ── Video file pick (record via camera input, or choose from gallery) ── */
   const handleVideoPicked = async (e) => {
     const file = e.target.files?.[0];
     if(!file) return;
     setShowAttachMenu(false);
     e.target.value="";
-
     const tempId = `temp-${Date.now()}`;
     const previewUrl = URL.createObjectURL(file);
     setMessages(p=>[...p,{id:tempId,from:"me",type:"video",videoUrl:previewUrl,fileSize:file.size,time:nowTime(),pending:true}]);
-
     try {
       const { url } = await uploadChatMedia(file, file.name || "video.mp4");
       const saved = await insertMessage({ type:"video", media_url:url, file_size:file.size, file_name:file.name });
       setMessages(p => p.map(m => m.id===tempId ? (saved ? rowToMessage(saved) : {...m, videoUrl:url, pending:false}) : m));
     } catch (err) {
-      console.warn("[CoupleSpace] video upload failed:", err.message || err);
       setMessages(p => p.map(m => m.id===tempId ? {...m, pending:false, failed:true} : m));
     }
   };
 
-  /* ── Voice / live video recording via MediaRecorder ── */
   const startRecording = async (type) => {
     setShowAttachMenu(false);
     setMediaError("");
@@ -774,19 +576,16 @@ export default function CoupleSpace() {
         const previewUrl = URL.createObjectURL(blob);
         const seconds = recordingSecondsRef.current;
         recordingStreamRef.current?.getTracks().forEach(t=>t.stop());
-
         const tempId = `temp-${Date.now()}`;
         const msgType = type==="video" ? "video" : "voice";
         const urlField = type==="video" ? "videoUrl" : "audioUrl";
         setMessages(p=>[...p,{id:tempId,from:"me",type:msgType,[urlField]:previewUrl,duration:seconds,time:nowTime(),pending:true}]);
-
         try {
           const ext = type==="video" ? "webm" : "webm";
           const { url } = await uploadChatMedia(blob, `recording.${ext}`);
           const saved = await insertMessage({ type:msgType, media_url:url, duration:seconds });
           setMessages(p => p.map(m => m.id===tempId ? (saved ? rowToMessage(saved) : {...m, [urlField]:url, pending:false}) : m));
         } catch (err) {
-          console.warn("[CoupleSpace] recording upload failed:", err.message || err);
           setMessages(p => p.map(m => m.id===tempId ? {...m, pending:false, failed:true} : m));
         }
       };
@@ -809,7 +608,6 @@ export default function CoupleSpace() {
     recordingTimerRef.current=null;
     if(mediaRecorderRef.current && mediaRecorderRef.current.state!=="inactive"){
       if(!send){
-        // cancel: detach onstop side-effects by clearing chunks before stop
         recordedChunksRef.current=[];
         mediaRecorderRef.current.onstop = () => {
           recordingStreamRef.current?.getTracks().forEach(t=>t.stop());
@@ -820,22 +618,31 @@ export default function CoupleSpace() {
     setRecording(null);
   };
 
+  /* ══════════════════════════════════════════════════════════
+     SAVINGS — ON-CHAIN WIRED: handleContribute + createGoal
+  ══════════════════════════════════════════════════════════ */
 
-  /* Savings */
   const handleContribute = async () => {
     const amt = parseFloat(contribAmount);
     if (!amt || amt <= 0) return;
 
-    if (activeGoal.vaultId && zkUser?.jwt) {
+    if (activeGoal.vaultId && zkUser?.address) {
       try {
         const amountMist = Math.round(amt * 1_000_000_000);
         const tx = txContributeCoupleVault({
           vaultId: activeGoal.vaultId,
           amount: amountMist,
         });
-        await client.executeTransactionBlock({ transactionBlock: tx });
+        const result = await executeWithEnoki(tx, enokiFlow);
+        console.log("[CoupleSpace] Contribution executed:", result);
+        setWalletBalances(prev => ({ ...prev, sui: +(prev.sui - amt).toFixed(4) }));
+        const now = new Date().toLocaleDateString("en-US",{month:"short",day:"numeric",year:"numeric"});
+        setWalletTxns(prev => [{
+          id: prev.length+1, type:"sent", token:"SUI", amount:amt,
+          to: "Couple Vault", date:now, note:`Contribute to ${activeGoal.label}`,
+        }, ...prev]);
       } catch (e) {
-        console.warn("On-chain contribute failed:", e.message);
+        console.warn("[CoupleSpace] On-chain contribute failed:", e.message);
       }
     }
 
@@ -849,16 +656,48 @@ export default function CoupleSpace() {
     setShowContributeModal(false);
   };
 
-  const createGoal=()=>{
+  const createGoal = async () => {
     if(!newGoal.label||!newGoal.target) return;
-    const g={id:goals.length+1,label:newGoal.label,token:newGoal.token,target:parseFloat(newGoal.target),saved:0,myContrib:0,partnerContrib:0,myMonthlyCommit:0,partnerMonthlyCommit:0,myMisses:0,partnerMisses:0,releaseType:newGoal.releaseType,releaseValue:newGoal.releaseValue,destinationWallet:"0x...",status:"active",createdDate:new Date().toISOString().split('T')[0]};
-    setGoals(p=>[...p,g]);
+    let newVaultId = null;
+    if (zkUser?.address && partnerAddress) {
+      try {
+        const targetMist = Math.round(parseFloat(newGoal.target) * 1_000_000_000);
+        const triggerTypeNum = newGoal.releaseType === "percent" ? 0 : newGoal.releaseType === "date" ? 1 : 0;
+        const triggerValueNum = newGoal.releaseType === "percent" 
+          ? parseInt(newGoal.releaseValue) 
+          : new Date(newGoal.releaseValue).getTime();
+        const tx = txCreateCoupleVault({
+          partnerB: normalizeAddress(partnerAddress),
+          target: targetMist,
+          triggerType: triggerTypeNum,
+          triggerValue: triggerValueNum,
+          label: newGoal.label,
+          destination: normalizeAddress(myAddress),
+        });
+        const result = await executeWithEnoki(tx, enokiFlow);
+        console.log("[CoupleSpace] Vault created:", result);
+        if (result?.effects?.created?.[0]?.reference?.objectId) {
+          newVaultId = result.effects.created[0].reference.objectId;
+        }
+      } catch (e) {
+        console.warn("[CoupleSpace] On-chain vault creation failed:", e.message);
+      }
+    }
+    const g = {
+      id: goals.length + 1, label: newGoal.label, token: newGoal.token,
+      target: parseFloat(newGoal.target), saved: 0, myContrib: 0, partnerContrib: 0,
+      myMonthlyCommit: 0, partnerMonthlyCommit: 0, myMisses: 0, partnerMisses: 0,
+      releaseType: newGoal.releaseType, releaseValue: newGoal.releaseValue,
+      destinationWallet: "0x...", status: "active",
+      createdDate: new Date().toISOString().split('T')[0],
+      vaultId: newVaultId,
+    };
+    setGoals(p => [...p, g]);
     setActiveGoal(g);
     setNewGoal({label:"",token:"USDC",target:"",releaseType:"percent",releaseValue:"80"});
     setShowCreateGoalModal(false);
   };
 
-  /* ── Personal Savings handlers ── */
   const personalContribute=(goalId)=>{
     const amt=parseFloat(personalContribAmount);
     if(!amt||amt<=0) return;
@@ -882,17 +721,11 @@ export default function CoupleSpace() {
   const createPersonalGoal=()=>{
     if(!newPersonalGoal.label||!newPersonalGoal.target||!newPersonalGoal.triggerValue) return;
     const g={
-      id:personalGoals.length+1,
-      label:newPersonalGoal.label,
-      token:newPersonalGoal.token,
-      target:parseFloat(newPersonalGoal.target),
-      saved:0,
-      triggerType:newPersonalGoal.triggerType,
-      triggerValue:newPersonalGoal.triggerValue,
+      id:personalGoals.length+1, label:newPersonalGoal.label, token:newPersonalGoal.token,
+      target:parseFloat(newPersonalGoal.target), saved:0,
+      triggerType:newPersonalGoal.triggerType, triggerValue:newPersonalGoal.triggerValue,
       destinationWallet:newPersonalGoal.destinationWallet||"0x7a2d…f9c3",
-      status:"active",
-      createdDate:new Date().toISOString().split("T")[0],
-      contributions:[],
+      status:"active", createdDate:new Date().toISOString().split("T")[0], contributions:[],
     };
     setPersonalGoals(p=>[...p,g]);
     setActivePersonalGoal(g);
@@ -920,7 +753,6 @@ export default function CoupleSpace() {
     return `Unlocks on ${d.toLocaleDateString("en-US",{month:"short",day:"numeric",year:"numeric"})}`;
   };
 
-  /* Circle chat */
   const sendCircleMessage=()=>{
     if(!circleChatInput.trim()) return;
     const t=new Date().toLocaleTimeString([],{hour:"2-digit",minute:"2-digit"});
@@ -932,6 +764,10 @@ export default function CoupleSpace() {
   const displayName = myName || "Ahmed";
   const myInitial = myName ? myName[0].toUpperCase() : "A";
   const partnerInitial = partnerName ? partnerName[0].toUpperCase() : "P";
+
+  /* ══════════════════════════════════════════════════════════
+     RENDER SCREENS
+  ══════════════════════════════════════════════════════════ */
 
   /* SPLASH */
   if(screen===SCREENS.SPLASH) return (
@@ -957,14 +793,10 @@ export default function CoupleSpace() {
     </div>
   );
 
-  /* ════════════════════════════════════════════════════════
-     ZKLOGIN — the gate. Beautiful, reassuring, trustworthy.
-  ════════════════════════════════════════════════════════ */
+  /* ZKLOGIN */
   if(screen===SCREENS.ZKLOGIN) return (
     <div style={S.root}><FontLink/><Stars/>
       <div style={{...S.meshBg,background:"radial-gradient(ellipse 90% 65% at 50% 0%, rgba(29,155,240,0.38) 0%, rgba(4,120,87,0.12) 55%, transparent 80%)"}}/>
-
-      {/* Top wordmark */}
       <div style={{position:"relative",zIndex:1,padding:"52px 24px 0",textAlign:"center"}}>
         <div className="f1" style={{marginBottom:40}}>
           <div style={{position:"relative",width:80,height:80,margin:"0 auto 20px"}}>
@@ -981,7 +813,6 @@ export default function CoupleSpace() {
           <p style={{fontFamily:"'DM Sans',sans-serif",color:"rgba(29,155,240,0.5)",fontSize:12,letterSpacing:2.5,textTransform:"uppercase",marginTop:10,fontWeight:300}}>your private world · on-chain</p>
         </div>
 
-        {/* Loading state — shown while processing OAuth callback */}
         {zkLoading && (
           <div className="f2" style={{padding:"48px 0",textAlign:"center"}}>
             <div style={{display:"flex",gap:8,justifyContent:"center",marginBottom:20}}>
@@ -992,7 +823,6 @@ export default function CoupleSpace() {
           </div>
         )}
 
-        {/* Error state */}
         {zkError && !zkLoading && (
           <div className="f2" style={{background:"rgba(239,68,68,0.08)",borderRadius:16,padding:"16px",border:"1px solid rgba(239,68,68,0.2)",marginBottom:20,textAlign:"left"}}>
             <p style={{fontFamily:"'DM Sans',sans-serif",color:"#EF4444",fontSize:13,fontWeight:500,margin:"0 0 4px"}}>Sign-in failed</p>
@@ -1000,19 +830,11 @@ export default function CoupleSpace() {
           </div>
         )}
 
-        {/* Main sign-in card */}
         {!zkLoading && (
           <>
             <div className="f2" style={{background:"rgba(0,0,0,0.75)",borderRadius:24,padding:"28px 22px",border:"1px solid rgba(29,155,240,0.14)",backdropFilter:"blur(14px)",marginBottom:16,boxShadow:"0 8px 40px rgba(0,0,0,0.4)"}}>
               <p style={{fontFamily:"'DM Sans',sans-serif",color:"rgba(29,155,240,0.45)",fontSize:11,fontWeight:600,letterSpacing:1.5,textTransform:"uppercase",marginBottom:20}}>Sign in to continue</p>
-
-              {/* Google button */}
-              <button
-                onClick={handleGoogleSignIn}
-                style={{width:"100%",padding:"16px 18px",borderRadius:16,background:"#fff",border:"none",display:"flex",alignItems:"center",gap:14,cursor:"pointer",marginBottom:12,boxShadow:"0 4px 20px rgba(0,0,0,0.35)",transition:"transform 0.15s,box-shadow 0.15s"}}
-                onMouseEnter={e=>{e.currentTarget.style.transform="translateY(-1px)";e.currentTarget.style.boxShadow="0 6px 28px rgba(0,0,0,0.45)";}}
-                onMouseLeave={e=>{e.currentTarget.style.transform="";e.currentTarget.style.boxShadow="0 4px 20px rgba(0,0,0,0.35)";}}>
-                {/* Google logo SVG */}
+              <button onClick={handleGoogleSignIn} style={{width:"100%",padding:"16px 18px",borderRadius:16,background:"#fff",border:"none",display:"flex",alignItems:"center",gap:14,cursor:"pointer",marginBottom:12,boxShadow:"0 4px 20px rgba(0,0,0,0.35)"}}>
                 <svg width="20" height="20" viewBox="0 0 48 48" style={{flexShrink:0}}>
                   <path fill="#FFC107" d="M43.6 20.1H42V20H24v8h11.3C33.7 32.7 29.3 36 24 36c-6.6 0-12-5.4-12-12s5.4-12 12-12c3.1 0 5.8 1.1 7.9 2.9l5.7-5.7C34.1 6.5 29.3 4 24 4 13 4 4 13 4 24s9 20 20 20 20-9 20-20c0-1.3-.1-2.6-.4-3.9z"/>
                   <path fill="#FF3D00" d="M6.3 14.7l6.6 4.8C14.7 16 19 13 24 13c3.1 0 5.8 1.1 7.9 2.9l5.7-5.7C34.1 6.5 29.3 4 24 4 16.3 4 9.7 8.3 6.3 14.7z"/>
@@ -1022,11 +844,7 @@ export default function CoupleSpace() {
                 <span style={{fontFamily:"'DM Sans',sans-serif",fontSize:15,fontWeight:600,color:"#3c4043",flex:1,textAlign:"left"}}>Continue with Google</span>
                 <span style={{color:"#999",fontSize:13}}>→</span>
               </button>
-
-              {/* Apple button */}
-              <button
-                style={{width:"100%",padding:"16px 18px",borderRadius:16,background:"rgba(255,255,255,0.04)",border:"1px solid rgba(255,255,255,0.1)",display:"flex",alignItems:"center",gap:14,cursor:"not-allowed",opacity:0.45}}
-                disabled>
+              <button style={{width:"100%",padding:"16px 18px",borderRadius:16,background:"rgba(255,255,255,0.04)",border:"1px solid rgba(255,255,255,0.1)",display:"flex",alignItems:"center",gap:14,cursor:"not-allowed",opacity:0.45}} disabled>
                 <svg width="20" height="20" viewBox="0 0 24 24" fill="#fff" style={{flexShrink:0}}>
                   <path d="M18.7 12.4c0-3 2.5-4.5 2.6-4.6-1.4-2.1-3.6-2.3-4.4-2.4-1.9-.2-3.6 1.1-4.6 1.1-.9 0-2.4-1.1-3.9-1-2 0-3.9 1.2-4.9 3-2.1 3.6-.5 9 1.5 11.9 1 1.4 2.1 3 3.6 2.9 1.4-.1 2-1 3.7-1 1.7 0 2.2 1 3.7 1 1.6 0 2.6-1.5 3.6-2.9.7-1 1.2-2 1.6-3.2-3-.7-3.5-4.8-3.5-4.8zM15.7 3.4c.8-1 1.4-2.3 1.2-3.7-1.2.1-2.6.8-3.5 1.8-.8.9-1.5 2.3-1.3 3.6 1.4.1 2.7-.7 3.6-1.7z"/>
                 </svg>
@@ -1035,7 +853,6 @@ export default function CoupleSpace() {
               </button>
             </div>
 
-            {/* How it works — trust builder */}
             <div className="f3" style={{background:"rgba(29,155,240,0.04)",borderRadius:18,padding:"18px 20px",border:"1px solid rgba(29,155,240,0.08)",marginBottom:16,textAlign:"left"}}>
               <p style={{fontFamily:"'DM Sans',sans-serif",color:"rgba(29,155,240,0.4)",fontSize:10,fontWeight:700,letterSpacing:1.5,textTransform:"uppercase",marginBottom:14}}>How your wallet is created</p>
               {[
@@ -1053,7 +870,6 @@ export default function CoupleSpace() {
               ))}
             </div>
 
-            {/* Trust badges */}
             <div className="f4" style={{display:"flex",justifyContent:"center",gap:20,marginBottom:24}}>
               {[
                 {icon:"⛓", label:"Sui blockchain"},
@@ -1082,8 +898,6 @@ export default function CoupleSpace() {
     <div style={S.root}><FontLink/><Stars/><Petals/>
       <div style={{...S.meshBg,background:"radial-gradient(ellipse 80% 55% at 50% 0%, rgba(29,155,240,0.3) 0%, rgba(4,120,87,0.15) 60%, transparent 80%)"}}/>
       <div style={{padding:"56px 22px 40px",position:"relative",zIndex:1}}>
-
-        {/* Brand */}
         <div className="f1" style={{textAlign:"center",marginBottom:36}}>
           <div style={{width:64,height:64,borderRadius:"50%",background:"linear-gradient(135deg,rgba(29,155,240,0.5),rgba(4,120,87,0.4))",border:"1px solid rgba(29,155,240,0.3)",display:"flex",alignItems:"center",justifyContent:"center",margin:"0 auto 18px",boxShadow:"0 0 36px rgba(29,155,240,0.25), 0 0 36px rgba(16,185,129,0.15)"}}>
             <span style={{fontSize:28,animation:"heartbeat 3s infinite"}}>♡</span>
@@ -1096,7 +910,6 @@ export default function CoupleSpace() {
           </p>
         </div>
 
-        {/* ── Couple Vault card ── */}
         <div className="f2" style={{background:"linear-gradient(145deg,rgba(29,155,240,0.18),rgba(80,20,100,0.3),rgba(0,0,0,0.7))",borderRadius:24,padding:"22px 20px",border:"1px solid rgba(29,155,240,0.2)",boxShadow:"0 8px 36px rgba(80,20,100,0.3)",marginBottom:14,cursor:"pointer",transition:"transform 0.2s"}}
           onClick={()=>goTo(SCREENS.SETUP)}>
           <div style={{display:"flex",alignItems:"center",gap:16,marginBottom:14}}>
@@ -1125,14 +938,12 @@ export default function CoupleSpace() {
           </div>
         </div>
 
-        {/* Divider */}
         <div className="f3" style={{display:"flex",alignItems:"center",gap:12,margin:"4px 0"}}>
           <div style={{flex:1,height:1,background:"linear-gradient(90deg,transparent,rgba(29,155,240,0.15))"}}/>
           <span style={{fontFamily:"'DM Sans',sans-serif",color:"rgba(29,155,240,0.3)",fontSize:11,letterSpacing:1}}>OR</span>
           <div style={{flex:1,height:1,background:"linear-gradient(90deg,rgba(16,185,129,0.15),transparent)"}}/>
         </div>
 
-        {/* ── Savings Circle card ── */}
         <div className="f4" style={{background:"linear-gradient(145deg,rgba(4,120,87,0.22),rgba(16,185,129,0.1),rgba(0,0,0,0.7))",borderRadius:24,padding:"22px 20px",border:"1px solid rgba(16,185,129,0.22)",boxShadow:"0 8px 36px rgba(4,120,87,0.2)",marginTop:14,cursor:"pointer",transition:"transform 0.2s"}}
           onClick={()=>goTo(SCREENS.CIRCLE_ENTRY)}>
           <div style={{display:"flex",alignItems:"center",gap:16,marginBottom:14}}>
@@ -1161,14 +972,12 @@ export default function CoupleSpace() {
           </div>
         </div>
 
-        {/* OR divider */}
         <div className="f4" style={{display:"flex",alignItems:"center",gap:12,margin:"4px 0"}}>
           <div style={{flex:1,height:1,background:"linear-gradient(90deg,transparent,rgba(245,158,11,0.15))"}}/>
           <span style={{fontFamily:"'DM Sans',sans-serif",color:"rgba(245,158,11,0.3)",fontSize:11,letterSpacing:1}}>OR</span>
           <div style={{flex:1,height:1,background:"linear-gradient(90deg,rgba(245,158,11,0.15),transparent)"}}/>
         </div>
 
-        {/* ── Personal Vault card ── */}
         <div className="f5" style={{background:"linear-gradient(145deg,rgba(120,80,4,0.22),rgba(245,158,11,0.08),rgba(0,0,0,0.7))",borderRadius:24,padding:"22px 20px",border:"1px solid rgba(245,158,11,0.2)",boxShadow:"0 8px 36px rgba(120,80,4,0.2)",marginTop:14,cursor:"pointer"}}
           onClick={()=>goTo(SCREENS.PERSONAL)}>
           <div style={{display:"flex",alignItems:"center",gap:16,marginBottom:14}}>
@@ -1213,7 +1022,6 @@ export default function CoupleSpace() {
           <p style={{fontFamily:"'DM Sans',sans-serif",color:"rgba(29,155,240,0.5)",fontSize:13,marginTop:8,lineHeight:1.7,fontWeight:300}}>Your name is how your partner sees you.<br/>Your Sui address is already ready.</p>
         </div>
 
-        {/* Google profile hint */}
         {zkUser?.email && (
           <div className="f2" style={{display:"flex",alignItems:"center",gap:12,background:"rgba(29,155,240,0.07)",borderRadius:16,padding:"12px 16px",border:"1px solid rgba(29,155,240,0.12)",marginBottom:14}}>
             {zkUser.picture
@@ -1368,7 +1176,6 @@ export default function CoupleSpace() {
           ))}
         </div>
 
-        {/* ── Circle/Ajo entry card — separate section ── */}
         <div className="f5" style={{
           background:"linear-gradient(145deg,rgba(4,120,87,0.2),rgba(16,185,129,0.08),rgba(0,0,0,0.7))",
           borderRadius:22,padding:"20px",border:"1px solid rgba(16,185,129,0.2)",
@@ -1390,7 +1197,6 @@ export default function CoupleSpace() {
           <span style={{color:"rgba(16,185,129,0.5)",fontSize:18,flexShrink:0}}>→</span>
         </div>
 
-        {/* ── Personal Vault entry card ── */}
         <div className="f6" style={{
           background:"linear-gradient(145deg,rgba(120,80,4,0.18),rgba(245,158,11,0.06),rgba(0,0,0,0.7))",
           borderRadius:22,padding:"20px",border:"1px solid rgba(245,158,11,0.15)",
@@ -1435,14 +1241,11 @@ export default function CoupleSpace() {
           <div key={m.id} style={{display:"flex",gap:8,maxWidth:"80%",alignSelf:m.from==="me"?"flex-end":"flex-start",flexDirection:m.from==="me"?"row-reverse":"row",alignItems:"flex-end"}}>
             {m.from!=="me"&&<Avatar name={partnerInitial} size={26} gradient="linear-gradient(135deg,#1D9BF0,#0F1419)" glow="rgba(29,155,240,0.5)"/>}
             <div style={{minWidth:0}}>
-              {/* TEXT */}
               {(!m.type||m.type==="text") && (
                 <div style={{background:m.from==="me"?"linear-gradient(135deg,#1D9BF0,#1A8CD8)":"rgba(0,0,0,0.85)",border:m.from==="me"?"none":"1px solid rgba(29,155,240,0.12)",borderRadius:m.from==="me"?"16px 16px 4px 16px":"16px 16px 16px 4px",padding:"10px 14px",boxShadow:m.from==="me"?"0 4px 16px rgba(29,155,240,0.35)":"none"}}>
                   <p style={{fontFamily:"'DM Sans',sans-serif",color:"#FFFFFF",fontSize:14,margin:0,lineHeight:1.5}}>{m.text}</p>
                 </div>
               )}
-
-              {/* IMAGE */}
               {m.type==="image" && (
                 <div style={{borderRadius:m.from==="me"?"16px 16px 4px 16px":"16px 16px 16px 4px",overflow:"hidden",border:"1px solid rgba(29,155,240,0.15)",maxWidth:220,position:"relative"}}>
                   <img src={m.imageUrl} alt="" style={{width:"100%",display:"block",maxHeight:280,objectFit:"cover",background:"#111",opacity:m.pending?0.5:1}}/>
@@ -1458,8 +1261,6 @@ export default function CoupleSpace() {
                   )}
                 </div>
               )}
-
-              {/* VOICE NOTE */}
               {m.type==="voice" && (
                 <div style={{background:m.from==="me"?"linear-gradient(135deg,#1D9BF0,#1A8CD8)":"rgba(0,0,0,0.85)",border:m.from==="me"?"none":"1px solid rgba(29,155,240,0.12)",borderRadius:m.from==="me"?"16px 16px 4px 16px":"16px 16px 16px 4px",padding:"10px 12px",boxShadow:m.from==="me"?"0 4px 16px rgba(29,155,240,0.35)":"none",display:"flex",alignItems:"center",gap:10,minWidth:180}}>
                   <span style={{fontSize:18,flexShrink:0}}>🎙️</span>
@@ -1476,8 +1277,6 @@ export default function CoupleSpace() {
                   </span>
                 </div>
               )}
-
-              {/* VIDEO */}
               {m.type==="video" && (
                 <div style={{borderRadius:m.from==="me"?"16px 16px 4px 16px":"16px 16px 16px 4px",overflow:"hidden",border:"1px solid rgba(29,155,240,0.15)",maxWidth:220,position:"relative"}}>
                   <video src={m.videoUrl} controls style={{width:"100%",display:"block",maxHeight:260,background:"#000",opacity:m.pending?0.5:1}}/>
@@ -1498,8 +1297,6 @@ export default function CoupleSpace() {
                   )}
                 </div>
               )}
-
-              {/* FILE */}
               {m.type==="file" && (
                 <a href={m.fileUrl||"#"} download={m.fileName} target="_blank" rel="noreferrer" style={{textDecoration:"none",display:"flex",alignItems:"center",gap:10,background:m.from==="me"?"linear-gradient(135deg,#1D9BF0,#1A8CD8)":"rgba(0,0,0,0.85)",border:m.from==="me"?"none":"1px solid rgba(29,155,240,0.12)",borderRadius:m.from==="me"?"16px 16px 4px 16px":"16px 16px 16px 4px",padding:"10px 14px",boxShadow:m.from==="me"?"0 4px 16px rgba(29,155,240,0.35)":"none",minWidth:180,maxWidth:240,opacity:m.pending?0.6:1,pointerEvents:m.pending?"none":"auto"}}>
                   <span style={{fontSize:22,flexShrink:0}}>📄</span>
@@ -1511,26 +1308,22 @@ export default function CoupleSpace() {
                   </div>
                 </a>
               )}
-
               <p style={{fontFamily:"'DM Sans',sans-serif",color:"rgba(29,155,240,0.3)",fontSize:9,margin:"4px 6px 0",textAlign:m.from==="me"?"right":"left"}}>{m.time}</p>
             </div>
           </div>
         ))}
         <div ref={chatEndRef}/>
       </div>
-      {/* Hidden inputs for image, file & video pick */}
       <input ref={imageInputRef} type="file" accept="image/*" style={{display:"none"}} onChange={handleImagePicked}/>
       <input ref={fileInputRef} type="file" style={{display:"none"}} onChange={handleFilePicked}/>
       <input ref={videoInputRef} type="file" accept="video/*" capture="user" style={{display:"none"}} onChange={handleVideoPicked}/>
 
-      {/* Media permission error toast */}
       {mediaError && (
         <div style={{position:"fixed",bottom:96,left:"50%",transform:"translateX(-50%)",width:"calc(100% - 32px)",maxWidth:398,background:"rgba(239,68,68,0.12)",border:"1px solid rgba(239,68,68,0.25)",borderRadius:14,padding:"10px 14px",zIndex:150}}>
           <p style={{fontFamily:"'DM Sans',sans-serif",color:"#EF4444",fontSize:11,margin:0,lineHeight:1.6}}>{mediaError}</p>
         </div>
       )}
 
-      {/* Attach menu */}
       {showAttachMenu && (
         <div style={{position:"fixed",bottom:88,left:"50%",transform:"translateX(-50%)",width:"calc(100% - 32px)",maxWidth:398,background:"rgba(0,0,0,0.97)",border:"1px solid rgba(29,155,240,0.15)",borderRadius:18,padding:14,display:"flex",justifyContent:"space-around",zIndex:150,backdropFilter:"blur(20px)",boxShadow:"0 8px 30px rgba(0,0,0,0.4)"}}>
           {[
@@ -1550,7 +1343,6 @@ export default function CoupleSpace() {
 
       <div style={{position:"fixed",bottom:0,left:"50%",transform:"translateX(-50%)",width:"100%",maxWidth:430,background:"rgba(0,0,0,0.95)",backdropFilter:"blur(24px)",borderTop:"1px solid rgba(29,155,240,0.08)",padding:"12px 16px 28px",display:"flex",gap:10,zIndex:100}}>
         {recording ? (
-          /* Recording-in-progress bar */
           <div style={{flex:1,background:"rgba(239,68,68,0.08)",border:"1px solid rgba(239,68,68,0.25)",borderRadius:20,padding:"10px 16px",display:"flex",alignItems:"center",gap:12}}>
             <div style={{width:10,height:10,borderRadius:"50%",background:"#EF4444",animation:"blink 1s ease-in-out infinite",flexShrink:0}}/>
             <span style={{fontFamily:"'DM Sans',sans-serif",fontSize:13,color:"#FFFFFF",flex:1}}>
@@ -1637,7 +1429,7 @@ export default function CoupleSpace() {
                 <p style={{fontFamily:"'DM Sans',sans-serif",color:"rgba(29,155,240,0.5)",fontSize:11,fontWeight:300,margin:0}}>Release Trigger: {activeGoal.releaseType === "percent" ? `${activeGoal.releaseValue}% funded` : activeGoal.releaseType === "date" ? `On ${activeGoal.releaseValue}` : "By duration"}</p>
               </div>
               {[["My contribution",`${activeGoal.myContrib} ${activeGoal.token}`],["Partner's contribution",`${activeGoal.partnerContrib} ${activeGoal.token}`],["Progress",`${Math.min(100,Math.round((activeGoal.saved/activeGoal.target)*100))}%`],["My monthly target",`${activeGoal.myMonthlyCommit} ${activeGoal.token}`],["My misses",`${activeGoal.myMisses} month(s)`],["Protocol Fee on withdrawal","2%"]].map(([k,v])=>(
-                <div style={{display:"flex",justifyContent:"space-between",padding:"8px 0",borderBottom:"1px solid rgba(29,155,240,0.07)"}}>
+                <div key={k} style={{display:"flex",justifyContent:"space-between",padding:"8px 0",borderBottom:"1px solid rgba(29,155,240,0.07)"}}>
                   <span style={{fontFamily:"'DM Sans',sans-serif",color:"rgba(29,155,240,0.5)",fontSize:12}}>{k}</span>
                   <span style={{fontFamily:"'DM Mono',monospace",color:"#1D9BF0",fontSize:12}}>{v}</span>
                 </div>
@@ -1680,7 +1472,7 @@ export default function CoupleSpace() {
     </div>
   );
 
-  /* CIRCLE ENTRY — public landing, no couple login needed */
+  /* CIRCLE ENTRY */
   if(screen===SCREENS.CIRCLE_ENTRY) return (
     <div style={{...S.root,background:"#030d08"}}><FontLink/>
       <div style={{position:"absolute",inset:0,pointerEvents:"none",zIndex:0}}>
@@ -1690,9 +1482,7 @@ export default function CoupleSpace() {
       </div>
       <div style={{...S.meshBg,background:"radial-gradient(ellipse 70% 50% at 50% 0%, rgba(4,120,87,0.4) 0%, transparent 70%)"}}/>
       <div style={{padding:"52px 22px 40px",position:"relative",zIndex:1}}>
-
         <button style={{...S.backBtn,color:"rgba(16,185,129,0.5)"}} onClick={()=>goTo(SCREENS.LOGIN)}>← back</button>
-
         <div className="f1" style={{textAlign:"center",margin:"16px 0 28px"}}>
           <div style={{width:70,height:70,borderRadius:"50%",background:"linear-gradient(135deg,rgba(4,120,87,0.5),rgba(16,185,129,0.3))",border:"1px solid rgba(16,185,129,0.4)",display:"flex",alignItems:"center",justifyContent:"center",margin:"0 auto 18px",boxShadow:"0 0 40px rgba(16,185,129,0.3)",animation:"coopPulse 3s ease-in-out infinite"}}>
             <span style={{fontSize:32}}>⭕</span>
@@ -1704,7 +1494,6 @@ export default function CoupleSpace() {
             Ajo · Esusu · Tontine — reimagined on-chain.<br/>Open to everyone. No couple account required.
           </p>
         </div>
-
         <div className="f2" style={{display:"flex",flexWrap:"wrap",gap:8,justifyContent:"center",marginBottom:26}}>
           {["👥 2–20 members","🔄 Auto rotation","🛡️ Stake-based trust","💸 Any token","⏰ Grace period","🗳️ Kick vote"].map(f=>(
             <div key={f} style={{background:"rgba(16,185,129,0.08)",borderRadius:20,padding:"5px 14px",border:"1px solid rgba(16,185,129,0.15)"}}>
@@ -1712,7 +1501,6 @@ export default function CoupleSpace() {
             </div>
           ))}
         </div>
-
         <div className="f3" style={{background:"rgba(4,20,12,0.6)",borderRadius:20,padding:"18px",border:"1px solid rgba(16,185,129,0.12)",marginBottom:22}}>
           <p style={{fontFamily:"'DM Sans',sans-serif",color:"rgba(16,185,129,0.45)",fontSize:10,fontWeight:700,letterSpacing:1.5,textTransform:"uppercase",marginBottom:14}}>How it works</p>
           {[
@@ -1720,7 +1508,7 @@ export default function CoupleSpace() {
             {n:"2",text:"Members join by staking their share before the round starts"},
             {n:"3",text:"Contract randomly assigns payout slots on-chain"},
             {n:"4",text:"Every cycle, one member receives the full pool"},
-            {n:"5",text:"Miss twice → auto-ejected. Stake covers missed rounds"},
+            {n:"5",text:"Miss twice → auto-ejected from circle"},
           ].map(s=>(
             <div key={s.n} style={{display:"flex",alignItems:"flex-start",gap:12,marginBottom:10}}>
               <div style={{width:22,height:22,borderRadius:"50%",background:"rgba(16,185,129,0.15)",border:"1px solid rgba(16,185,129,0.25)",display:"flex",alignItems:"center",justifyContent:"center",flexShrink:0,marginTop:1}}>
@@ -1730,7 +1518,6 @@ export default function CoupleSpace() {
             </div>
           ))}
         </div>
-
         <div className="f4" style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:10,marginBottom:16}}>
           <button style={{padding:"16px 12px",borderRadius:16,background:"linear-gradient(135deg,#047857,#10B981)",border:"none",color:"#fff",fontSize:14,fontWeight:600,cursor:"pointer",fontFamily:"'DM Sans',sans-serif",boxShadow:"0 6px 24px rgba(4,120,87,0.45)",letterSpacing:0.3}}
             onClick={()=>goTo(SCREENS.CIRCLE_LOGIN)}>
@@ -1741,7 +1528,6 @@ export default function CoupleSpace() {
             Create Circle
           </button>
         </div>
-
         <div className="f5" style={{background:"rgba(4,20,12,0.5)",borderRadius:18,padding:"16px",border:"1px solid rgba(16,185,129,0.1)"}}>
           <p style={{fontFamily:"'DM Sans',sans-serif",color:"rgba(16,185,129,0.45)",fontSize:10,fontWeight:700,letterSpacing:1.5,textTransform:"uppercase",marginBottom:12}}>Active Circles</p>
           {circles.slice(0,2).map(c=>(
@@ -1761,7 +1547,6 @@ export default function CoupleSpace() {
             Browse all circles →
           </button>
         </div>
-
         <p className="f6" style={{fontFamily:"'DM Sans',sans-serif",color:"rgba(16,185,129,0.2)",fontSize:11,textAlign:"center",marginTop:18,letterSpacing:0.5,lineHeight:1.8}}>Powered by Sui · Permissionless · On-chain</p>
       </div>
     </div>
@@ -1771,7 +1556,6 @@ export default function CoupleSpace() {
   if(screen===SCREENS.CIRCLE_LOGIN) return (
     <div style={{...S.root,background:"#050f09"}}>
       <FontLink/><Stars/>
-      {/* Green top accent bar — signals separate section */}
       <div style={{position:"fixed",top:0,left:"50%",transform:"translateX(-50%)",width:"100%",maxWidth:430,height:3,background:"linear-gradient(90deg,transparent,#10B981,#34D399,#10B981,transparent)",zIndex:200}}/>
       <div style={{...S.meshBg,background:"radial-gradient(ellipse 70% 50% at 50% 0%, rgba(4,120,87,0.45) 0%, transparent 70%)"}}/>
       <div style={{padding:"52px 24px 120px",position:"relative",zIndex:1}}>
@@ -1832,7 +1616,6 @@ export default function CoupleSpace() {
   /* CIRCLE PORTAL */
   if(screen===SCREENS.CIRCLE_PORTAL) return (
     <div style={{...S.root,background:"#050f09"}}><FontLink/><Stars/>
-      {/* Green top accent bar */}
       <div style={{position:"fixed",top:0,left:"50%",transform:"translateX(-50%)",width:"100%",maxWidth:430,height:3,background:"linear-gradient(90deg,transparent,#10B981,#34D399,#10B981,transparent)",zIndex:200}}/>
       <div style={{...S.meshBg,background:"radial-gradient(ellipse 70% 40% at 50% 0%, rgba(4,120,87,0.35) 0%, rgba(16,185,129,0.05) 60%, transparent 100%)"}}/>
       <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",padding:"48px 20px 14px",position:"sticky",top:0,zIndex:20,background:"rgba(5,15,9,0.92)",backdropFilter:"blur(20px)",borderBottom:"1px solid rgba(16,185,129,0.12)"}}>
@@ -1918,7 +1701,6 @@ export default function CoupleSpace() {
   /* CIRCLE CHAT */
   if(screen===SCREENS.CIRCLE_CHAT) return (
     <div style={{...S.root,background:"#050f09"}}><FontLink/><Stars/>
-      {/* Green top accent bar */}
       <div style={{position:"fixed",top:0,left:"50%",transform:"translateX(-50%)",width:"100%",maxWidth:430,height:3,background:"linear-gradient(90deg,transparent,#10B981,#34D399,#10B981,transparent)",zIndex:200}}/>
       <div style={{display:"flex",alignItems:"center",gap:12,padding:"52px 20px 14px",position:"sticky",top:0,zIndex:20,background:"rgba(5,15,9,0.92)",backdropFilter:"blur(20px)",borderBottom:"1px solid rgba(16,185,129,0.12)"}}>
         <button style={{...S.backBtn,color:"rgba(16,185,129,0.5)"}} onClick={()=>goTo(SCREENS.CIRCLE_PORTAL)}>←</button>
@@ -1952,7 +1734,7 @@ export default function CoupleSpace() {
     </div>
   );
 
-  /* CIRCLE REGISTER — Create a new circle */
+  /* CIRCLE REGISTER */
   if(screen===SCREENS.CIRCLE_REGISTER) return (
     <div style={{...S.root,background:"#050f09"}}>
       <FontLink/><Stars/>
@@ -1960,7 +1742,6 @@ export default function CoupleSpace() {
       <div style={{...S.meshBg,background:"radial-gradient(ellipse 70% 50% at 50% 0%, rgba(4,120,87,0.45) 0%, transparent 70%)"}}/>
       <div style={{padding:"52px 24px 120px",position:"relative",zIndex:1}}>
         <button style={{...S.backBtn,color:"rgba(16,185,129,0.5)"}} onClick={()=>goTo(SCREENS.CIRCLE_ENTRY)}>← Back</button>
-
         <div className="f1" style={{marginBottom:28,marginTop:8}}>
           <h2 style={{fontFamily:"'Cormorant Garamond',serif",fontSize:32,fontWeight:300,color:"#FFFFFF",lineHeight:1.25}}>
             Create a <em style={{color:"#10B981"}}>Circle</em>
@@ -1969,14 +1750,12 @@ export default function CoupleSpace() {
             You'll be the admin. Share the Circle ID with members.
           </p>
         </div>
-
         <div className="f2" style={{...S.card,marginBottom:14,borderColor:"rgba(16,185,129,0.15)"}}>
           <p style={{...S.cardEyebrow,color:"rgba(16,185,129,0.5)"}}>Circle name</p>
           <input style={{...S.input,marginBottom:14,borderColor:"rgba(16,185,129,0.2)"}}
             placeholder="e.g. Sunrise Ajo"
             value={newCircle.name}
             onChange={e=>setNewCircle(p=>({...p,name:e.target.value}))}/>
-
           <p style={{...S.cardEyebrow,color:"rgba(16,185,129,0.5)"}}>Number of members</p>
           <div style={{display:"flex",gap:8,marginBottom:14}}>
             {["4","6","8","12"].map(n=>(
@@ -1988,14 +1767,12 @@ export default function CoupleSpace() {
                 onClick={()=>setNewCircle(p=>({...p,size:n}))}>{n}</button>
             ))}
           </div>
-
           <p style={{...S.cardEyebrow,color:"rgba(16,185,129,0.5)"}}>Monthly contribution</p>
           <input style={{...S.input,marginBottom:14,fontSize:18,fontWeight:300,borderColor:"rgba(16,185,129,0.2)"}}
             placeholder="e.g. 100"
             type="number"
             value={newCircle.contribution}
             onChange={e=>setNewCircle(p=>({...p,contribution:e.target.value}))}/>
-
           <p style={{...S.cardEyebrow,color:"rgba(16,185,129,0.5)"}}>Token</p>
           <div style={{display:"flex",gap:10,marginBottom:0}}>
             {["USDC","SUI"].map(t=>(
@@ -2008,7 +1785,6 @@ export default function CoupleSpace() {
             ))}
           </div>
         </div>
-
         <div className="f3" style={{...S.card,marginBottom:20,borderColor:"rgba(16,185,129,0.15)"}}>
           <p style={{...S.cardEyebrow,color:"rgba(16,185,129,0.5)"}}>Grace period (days)</p>
           <p style={{fontFamily:"'DM Sans',sans-serif",color:"rgba(16,185,129,0.4)",fontSize:12,marginBottom:12,fontWeight:300,lineHeight:1.5}}>
@@ -2025,7 +1801,6 @@ export default function CoupleSpace() {
             ))}
           </div>
         </div>
-
         {newCircle.name && newCircle.contribution && (
           <div className="f4" style={{...S.card,marginBottom:20,background:"rgba(4,120,87,0.1)",borderColor:"rgba(16,185,129,0.2)"}}>
             <p style={{...S.cardEyebrow,color:"rgba(16,185,129,0.5)"}}>Preview</p>
@@ -2035,7 +1810,6 @@ export default function CoupleSpace() {
             </p>
           </div>
         )}
-
         <div className="f5">
           <button style={{width:"100%",padding:"16px",borderRadius:16,background:"linear-gradient(135deg,#047857,#10B981)",border:"none",color:"#fff",fontSize:15,fontWeight:600,cursor:"pointer",fontFamily:"'DM Sans',sans-serif",boxShadow:"0 6px 24px rgba(4,120,87,0.45)",letterSpacing:0.3,
             opacity:(newCircle.name&&newCircle.contribution)?1:0.4}}
@@ -2058,9 +1832,7 @@ export default function CoupleSpace() {
     </div>
   );
 
-  /* ══════════════════════════════════════════
-     PERSONAL SAVINGS — screen
-  ══════════════════════════════════════════ */
+  /* PERSONAL */
   if(screen===SCREENS.PERSONAL) {
     const activeGoals = personalGoals.filter(g=>g.status!=="released");
     const releasedGoals = personalGoals.filter(g=>g.status==="released");
@@ -2070,7 +1842,6 @@ export default function CoupleSpace() {
       <div style={{...S.root,background:"#000000"}}>
         <FontLink/>
         <Stars/>
-        {/* Gold accent bar */}
         <div style={{position:"fixed",top:0,left:"50%",transform:"translateX(-50%)",width:"100%",maxWidth:430,height:3,background:"linear-gradient(90deg,transparent,#F59E0B,#FCD34D,#F59E0B,transparent)",zIndex:200}}/>
         <div style={{...S.meshBg,background:"radial-gradient(ellipse 70% 45% at 50% 0%, rgba(120,80,4,0.35) 0%, transparent 70%)"}}/>
 
@@ -2085,7 +1856,6 @@ export default function CoupleSpace() {
             <div style={{width:42,height:42,borderRadius:14,background:"linear-gradient(135deg,rgba(120,80,4,0.6),rgba(245,158,11,0.3))",border:"1px solid rgba(245,158,11,0.3)",display:"flex",alignItems:"center",justifyContent:"center",fontSize:20}}>🔒</div>
           </div>
 
-          {/* Privacy notice */}
           <div style={{background:"rgba(245,158,11,0.06)",borderRadius:14,padding:"12px 16px",marginBottom:20,border:"1px solid rgba(245,158,11,0.12)",display:"flex",alignItems:"center",gap:10}}>
             <span style={{fontSize:14}}>👁️</span>
             <p style={{fontFamily:"'DM Sans',sans-serif",color:"rgba(245,158,11,0.55)",fontSize:12,fontWeight:300,margin:0,lineHeight:1.5}}>
@@ -2093,7 +1863,6 @@ export default function CoupleSpace() {
             </p>
           </div>
 
-          {/* Contribute modal */}
           {showPersonalContrib && display && (
             <div style={{position:"fixed",inset:0,background:"rgba(0,0,0,0.85)",zIndex:300,display:"flex",alignItems:"flex-end",justifyContent:"center"}}
               onClick={()=>setShowPersonalContrib(false)}>
@@ -2120,7 +1889,6 @@ export default function CoupleSpace() {
             </div>
           )}
 
-          {/* Goals list */}
           {personalGoals.length === 0 && (
             <div style={{textAlign:"center",padding:"48px 0"}}>
               <p style={{fontSize:40,marginBottom:12}}>🔒</p>
@@ -2156,12 +1924,9 @@ export default function CoupleSpace() {
                     {isTriggered && <span style={{fontFamily:"'DM Sans',sans-serif",color:"#10B981",fontSize:10,fontWeight:600}}>✓ TRIGGERED</span>}
                   </div>
                 </div>
-
-                {/* Progress */}
                 <div style={{height:4,background:"rgba(245,158,11,0.1)",borderRadius:10,overflow:"hidden",marginBottom:10}}>
                   <div style={{width:`${p}%`,height:"100%",background:"linear-gradient(90deg,#92400E,#F59E0B)",borderRadius:10,transition:"width 0.6s ease"}}/>
                 </div>
-
                 <div style={{display:"flex",justifyContent:"space-between",alignItems:"center"}}>
                   <p style={{fontFamily:"'DM Sans',sans-serif",color:"rgba(245,158,11,0.6)",fontSize:12,margin:0}}>
                     {g.saved.toLocaleString()} / {g.target.toLocaleString()} {g.token}
@@ -2182,8 +1947,6 @@ export default function CoupleSpace() {
                     </button>
                   )}
                 </div>
-
-                {/* Mini history */}
                 {activePersonalGoal?.id===g.id && g.contributions.length>0 && (
                   <div style={{marginTop:14,paddingTop:14,borderTop:"1px solid rgba(245,158,11,0.08)"}}>
                     <p style={{fontFamily:"'DM Sans',sans-serif",color:"rgba(245,158,11,0.4)",fontSize:10,fontWeight:600,letterSpacing:1,textTransform:"uppercase",marginBottom:8}}>History</p>
@@ -2204,7 +1967,6 @@ export default function CoupleSpace() {
             );
           })}
 
-          {/* Released goals */}
           {releasedGoals.length>0 && (
             <div style={{marginTop:8}}>
               <p style={{fontFamily:"'DM Sans',sans-serif",color:"rgba(245,158,11,0.3)",fontSize:11,fontWeight:600,letterSpacing:1,textTransform:"uppercase",marginBottom:10}}>Released</p>
@@ -2222,7 +1984,6 @@ export default function CoupleSpace() {
             </div>
           )}
 
-          {/* Create new goal button */}
           <button style={{...S.primaryBtn,marginTop:12,background:"linear-gradient(135deg,#92400E,#D97706)",boxShadow:"0 6px 24px rgba(120,80,4,0.45)"}}
             onClick={()=>goTo(SCREENS.PERSONAL_CREATE)}>
             + New Personal Goal
@@ -2239,9 +2000,7 @@ export default function CoupleSpace() {
     );
   }
 
-  /* ══════════════════════════════════════════
-     PERSONAL CREATE — screen
-  ══════════════════════════════════════════ */
+  /* PERSONAL CREATE */
   if(screen===SCREENS.PERSONAL_CREATE) return (
     <div style={{...S.root,background:"#000000"}}>
       <FontLink/><Stars/>
@@ -2264,12 +2023,10 @@ export default function CoupleSpace() {
           <input style={{...S.input,marginBottom:14,borderColor:"rgba(245,158,11,0.18)"}}
             placeholder="e.g. Emergency Fund 🛡️"
             value={newPersonalGoal.label} onChange={e=>setNewPersonalGoal(p=>({...p,label:e.target.value}))}/>
-
           <p style={S.cardEyebrow}>Target amount</p>
           <input style={{...S.input,marginBottom:14,fontSize:18,fontWeight:300,borderColor:"rgba(245,158,11,0.18)"}}
             placeholder="0.00" type="number"
             value={newPersonalGoal.target} onChange={e=>setNewPersonalGoal(p=>({...p,target:e.target.value}))}/>
-
           <p style={S.cardEyebrow}>Token</p>
           <div style={{display:"flex",gap:10,marginBottom:14}}>
             {["USDC","SUI"].map(t=>(
@@ -2283,7 +2040,6 @@ export default function CoupleSpace() {
           </div>
         </div>
 
-        {/* Lock trigger (Rule 3) */}
         <div className="f3" style={{...S.card,marginBottom:14,borderColor:"rgba(245,158,11,0.12)"}}>
           <p style={S.cardEyebrow}>Lock trigger</p>
           <p style={{fontFamily:"'DM Sans',sans-serif",color:"rgba(245,158,11,0.35)",fontSize:12,marginBottom:14,fontWeight:300,lineHeight:1.5}}>
@@ -2323,7 +2079,6 @@ export default function CoupleSpace() {
           )}
         </div>
 
-        {/* Destination wallet */}
         <div className="f4" style={{...S.card,marginBottom:24,borderColor:"rgba(245,158,11,0.12)"}}>
           <p style={S.cardEyebrow}>Destination wallet</p>
           <input style={{...S.input,borderColor:"rgba(245,158,11,0.18)"}}
@@ -2352,9 +2107,7 @@ export default function CoupleSpace() {
     </div>
   );
 
-  /* ══════════════════════════════════════════
-     WALLET SCREEN
-  ══════════════════════════════════════════ */
+  /* WALLET */
   if (screen === SCREENS.WALLET) {
     const displayName = myName || zkUser?.name?.split(" ")[0] || "You";
     return (
@@ -2362,7 +2115,6 @@ export default function CoupleSpace() {
         <FontLink/><Stars/>
         <div style={{...S.meshBg, background:"radial-gradient(ellipse 70% 40% at 50% 0%, rgba(59,130,246,0.2) 0%, rgba(29,155,240,0.15) 60%, transparent 90%)"}}/>
 
-        {/* Send Modal */}
         {showSendModal && (
           <div style={{position:"fixed",inset:0,background:"rgba(0,0,0,0.85)",zIndex:300,display:"flex",alignItems:"flex-end",justifyContent:"center"}}
             onClick={()=>setShowSendModal(false)}>
@@ -2371,8 +2123,6 @@ export default function CoupleSpace() {
               <p style={{fontFamily:"'Cormorant Garamond',serif",color:"#FFFFFF",fontSize:24,fontWeight:300,marginBottom:20}}>
                 Send <em style={{color:"#60A5FA"}}>funds</em>
               </p>
-
-              {/* Token selector */}
               <p style={{...S.cardEyebrow,marginBottom:10}}>Token</p>
               <div style={{display:"flex",gap:10,marginBottom:16}}>
                 {["SUI","USDC"].map(t=>(
@@ -2385,7 +2135,6 @@ export default function CoupleSpace() {
                   </button>
                 ))}
               </div>
-
               <p style={{...S.cardEyebrow,marginBottom:10}}>Amount</p>
               <div style={{position:"relative",marginBottom:16}}>
                 <input style={{...S.input,borderColor:"rgba(59,130,246,0.2)",paddingRight:70}} type="number"
@@ -2395,15 +2144,12 @@ export default function CoupleSpace() {
                   {sendToken} · bal: {sendToken==="SUI"?walletBalances.sui:walletBalances.usdc}
                 </span>
               </div>
-
               <p style={{...S.cardEyebrow,marginBottom:10}}>Recipient address</p>
               <input style={{...S.input,marginBottom:16,borderColor:"rgba(59,130,246,0.2)"}}
                 placeholder="0x…" value={sendAddress} onChange={e=>setSendAddress(e.target.value)}/>
-
               <p style={{...S.cardEyebrow,marginBottom:10}}>Note (optional)</p>
               <input style={{...S.input,marginBottom:20,borderColor:"rgba(59,130,246,0.2)"}}
                 placeholder="e.g. Savings contribution" value={sendNote} onChange={e=>setSendNote(e.target.value)}/>
-
               <button style={{...S.primaryBtn,
                 background:"linear-gradient(135deg,#1D4ED8,#3B82F6)",
                 boxShadow:"0 6px 24px rgba(59,130,246,0.4)",
@@ -2418,7 +2164,6 @@ export default function CoupleSpace() {
           </div>
         )}
 
-        {/* Receive Modal */}
         {showReceiveModal && (
           <div style={{position:"fixed",inset:0,background:"rgba(0,0,0,0.85)",zIndex:300,display:"flex",alignItems:"flex-end",justifyContent:"center"}}
             onClick={()=>setShowReceiveModal(false)}>
@@ -2430,16 +2175,12 @@ export default function CoupleSpace() {
               <p style={{fontFamily:"'DM Sans',sans-serif",color:"rgba(148,163,184,0.5)",fontSize:13,marginBottom:24,fontWeight:300}}>
                 Share your address to receive SUI or USDC
               </p>
-
-              {/* QR placeholder */}
               <div style={{width:160,height:160,margin:"0 auto 20px",borderRadius:16,
                 background:"rgba(59,130,246,0.08)",border:"2px solid rgba(59,130,246,0.2)",
                 display:"flex",flexDirection:"column",alignItems:"center",justifyContent:"center",gap:8}}>
                 <span style={{fontSize:48}}>⬛</span>
                 <p style={{fontFamily:"'DM Sans',sans-serif",color:"rgba(96,165,250,0.4)",fontSize:10}}>QR Code</p>
               </div>
-
-              {/* Address display */}
               <div style={{background:"rgba(59,130,246,0.06)",borderRadius:14,padding:"14px 16px",
                 border:"1px solid rgba(59,130,246,0.15)",marginBottom:16,display:"flex",alignItems:"center",gap:10}}>
                 <p style={{fontFamily:"'DM Sans',sans-serif",color:"#94A3B8",fontSize:12,flex:1,wordBreak:"break-all",lineHeight:1.6,margin:0}}>
@@ -2452,7 +2193,6 @@ export default function CoupleSpace() {
                   {walletCopied?"Copied ✓":"Copy"}
                 </button>
               </div>
-
               <div style={{background:"rgba(59,130,246,0.05)",borderRadius:12,padding:"12px 14px",border:"1px solid rgba(59,130,246,0.1)"}}>
                 <p style={{fontFamily:"'DM Sans',sans-serif",color:"rgba(96,165,250,0.5)",fontSize:11,margin:0,lineHeight:1.6}}>
                   ⚡ This is your zkLogin Sui address — derived from your Google account.<br/>
@@ -2464,7 +2204,6 @@ export default function CoupleSpace() {
         )}
 
         <div style={{padding:"52px 22px 110px",position:"relative",zIndex:1}}>
-          {/* Header */}
           <div className="f1" style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:24}}>
             <div>
               <p style={{fontFamily:"'DM Sans',sans-serif",color:"rgba(148,163,184,0.5)",fontSize:13,fontWeight:300}}>Your wallet,</p>
@@ -2478,7 +2217,6 @@ export default function CoupleSpace() {
             }
           </div>
 
-          {/* Balance card */}
           <div className="f2" style={{
             background:"linear-gradient(145deg,rgba(29,78,216,0.25),rgba(59,130,246,0.15),rgba(0,0,0,0.7))",
             borderRadius:28,padding:"28px 22px",
@@ -2487,8 +2225,6 @@ export default function CoupleSpace() {
             marginBottom:16,
           }}>
             <p style={{fontFamily:"'DM Sans',sans-serif",color:"rgba(148,163,184,0.5)",fontSize:12,fontWeight:300,marginBottom:16,letterSpacing:1,textTransform:"uppercase"}}>Total Balance</p>
-
-            {/* SUI balance */}
             <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:12,
               paddingBottom:12,borderBottom:"1px solid rgba(59,130,246,0.1)"}}>
               <div style={{display:"flex",alignItems:"center",gap:10}}>
@@ -2502,8 +2238,6 @@ export default function CoupleSpace() {
                 {walletBalances.sui.toFixed(4)}
               </p>
             </div>
-
-            {/* USDC balance */}
             <div style={{display:"flex",justifyContent:"space-between",alignItems:"center"}}>
               <div style={{display:"flex",alignItems:"center",gap:10}}>
                 <div style={{width:36,height:36,borderRadius:10,background:"rgba(16,185,129,0.12)",border:"1px solid rgba(16,185,129,0.2)",display:"flex",alignItems:"center",justifyContent:"center",fontSize:14,fontWeight:700,color:"#34D399",fontFamily:"'DM Sans',sans-serif"}}>$</div>
@@ -2516,8 +2250,6 @@ export default function CoupleSpace() {
                 {walletBalances.usdc.toFixed(2)}
               </p>
             </div>
-
-            {/* Address strip */}
             <div style={{marginTop:16,paddingTop:14,borderTop:"1px solid rgba(59,130,246,0.08)",
               display:"flex",alignItems:"center",justifyContent:"space-between"}}>
               <p style={{fontFamily:"'DM Sans',sans-serif",color:"rgba(148,163,184,0.4)",fontSize:11,margin:0}}>
@@ -2531,7 +2263,6 @@ export default function CoupleSpace() {
             </div>
           </div>
 
-          {/* Send / Receive buttons */}
           <div className="f3" style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:12,marginBottom:24}}>
             <button style={{padding:"16px",borderRadius:18,cursor:"pointer",
               background:"linear-gradient(135deg,#1D4ED8,#3B82F6)",border:"none",
@@ -2549,7 +2280,6 @@ export default function CoupleSpace() {
             </button>
           </div>
 
-          {/* Recent transactions */}
           <p style={S.sectionLabel}>Recent Transactions</p>
           <div className="f4">
             {walletTxns.length === 0 && (
@@ -2563,15 +2293,12 @@ export default function CoupleSpace() {
                 background:"rgba(0,0,0,0.7)",borderRadius:16,padding:"14px 16px",marginBottom:8,
                 border:"1px solid rgba(59,130,246,0.08)",
               }}>
-                {/* Icon */}
                 <div style={{width:40,height:40,borderRadius:12,flexShrink:0,
                   background:tx.type==="received"?"rgba(16,185,129,0.12)":"rgba(239,68,68,0.1)",
                   border:tx.type==="received"?"1px solid rgba(16,185,129,0.2)":"1px solid rgba(239,68,68,0.15)",
                   display:"flex",alignItems:"center",justifyContent:"center",fontSize:16}}>
                   {tx.type==="received"?"↓":"↑"}
                 </div>
-
-                {/* Details */}
                 <div style={{flex:1,minWidth:0}}>
                   <p style={{fontFamily:"'DM Sans',sans-serif",color:"#FFFFFF",fontSize:13,fontWeight:500,margin:0,
                     overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>
@@ -2583,8 +2310,6 @@ export default function CoupleSpace() {
                       : shortAddr(tx.to||"")}
                   </p>
                 </div>
-
-                {/* Amount */}
                 <p style={{fontFamily:"'Cormorant Garamond',serif",
                   color:tx.type==="received"?"#34D399":"#F87171",
                   fontSize:17,fontWeight:400,margin:0,flexShrink:0}}>
@@ -2594,7 +2319,6 @@ export default function CoupleSpace() {
             ))}
           </div>
 
-          {/* zkLogin info strip */}
           <div style={{textAlign:"center",padding:"14px",border:"1px solid rgba(59,130,246,0.07)",borderRadius:14,marginTop:8}}>
             <p style={{fontFamily:"'DM Sans',sans-serif",color:"rgba(96,165,250,0.25)",fontSize:11}}>
               ⚡ zkLogin wallet · Gas sponsored · Derived from your Google account
