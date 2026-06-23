@@ -295,26 +295,25 @@ export default function CoupleSpace() {
   }, []);
 
   useEffect(()=>{
-    if (zkSession?.address) {
-      const user = {
-        address: zkSession.address,
-        jwt:     zkSession.jwt ?? "",
-        email:   zkSession.claims?.email   ?? "",
-        name:    zkSession.claims?.name    ?? "",
-        picture: zkSession.claims?.picture ?? "",
-      };
-      setZkUser(user);
-      const savedName = localStorage.getItem("cs_myName");
-      if (savedName) {
-        setMyName(savedName);
-        setNameInput(savedName);
-        if (screen === SCREENS.ZKLOGIN) goTo(SCREENS.LOGIN);
-      } else if (screen === SCREENS.ZKLOGIN) {
-        goTo(SCREENS.SETUP);
-      }
+  if (zkSession?.address) {
+    const user = {
+      address: zkSession.address,
+      jwt:     zkSession.jwt ?? "",
+      email:   zkSession.claims?.email   ?? "",
+      name:    zkSession.claims?.name    ?? "",
+      picture: zkSession.claims?.picture ?? "",
+    };
+    setZkUser(user);
+    const savedName = localStorage.getItem("cs_myName");
+    if (savedName) {
+      setMyName(savedName);
+      setNameInput(savedName);
+      goTo(SCREENS.LOGIN);  // remove the screen check — just always go
+    } else {
+      goTo(SCREENS.SETUP);  // remove the screen check — just always go
     }
-  // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [zkSession]);
+  }
+}, [zkSession]);  // screen removed from deps, goTo always fires
 
   useEffect(()=>{
     if (screen === SCREENS.ZKLOGIN) return;
