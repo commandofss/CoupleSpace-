@@ -308,12 +308,12 @@ export default function CoupleSpace() {
     if (savedName) {
       setMyName(savedName);
       setNameInput(savedName);
-      goTo(SCREENS.LOGIN);  // remove the screen check — just always go
+      goTo(SCREENS.LOGIN);
     } else {
-      goTo(SCREENS.SETUP);  // remove the screen check — just always go
+      goTo(SCREENS.SETUP);
     }
   }
-}, [zkSession]);  // screen removed from deps, goTo always fires
+}, [zkSession]);
 
   useEffect(()=>{
     if (screen === SCREENS.ZKLOGIN) return;
