@@ -303,26 +303,35 @@ export default function CoupleSpace() {
 }, []);
 
   useEffect(()=>{
-  console.log("[CoupleSpace] zkSession:", JSON.stringify(zkSession));
-  if (zkSession?.address) {
-    const user = {
-      address: zkSession.address,
-      jwt:     zkSession.jwt ?? "",
-      email:   zkSession.claims?.email   ?? "",
-      name:    zkSession.claims?.name    ?? "",
-      picture: zkSession.claims?.picture ?? "",
-    };
-    setZkUser(user);
-    const savedName = localStorage.getItem("cs_myName");
-    if (savedName) {
-      setMyName(savedName);
-      setNameInput(savedName);
-      goTo(SCREENS.LOGIN);
-    } else {
-      goTo(SCREENS.SETUP);
+  if (!zkSession?.jwt) return;
+  (async () => {
+    try {
+      const { address, salt } = await fetchZkLoginUser(zkSession.jwt);
+      if (!address) return;
+      const payload = decodeJwtPayload(zkSession.jwt);
+      const user = {
+        address,
+        salt,
+        jwt:     zkSession.jwt,
+        email:   payload?.email   ?? "",
+        name:    payload?.name    ?? "",
+        picture: payload?.picture ?? "",
+      };
+      setZkUser(user);
+      const savedName = localStorage.getItem("cs_myName");
+      if (savedName) {
+        setMyName(savedName);
+        setNameInput(savedName);
+        goTo(SCREENS.LOGIN);
+      } else {
+        goTo(SCREENS.SETUP);
+      }
+    } catch(e) {
+      console.warn("[CoupleSpace] Could not fetch user from JWT:", e.message);
     }
-  }
-}, [zkSession]);
+  })();
+// eslint-disable-next-line react-hooks/exhaustive-deps
+}, [zkSession?.jwt]);
 
   useEffect(()=>{
     if (screen === SCREENS.ZKLOGIN) return;
