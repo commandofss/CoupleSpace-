@@ -303,7 +303,7 @@ export default function CoupleSpace() {
 }, []);
 
   useEffect(()=>{
-  console.log("[CoupleSpace] zkSession:", zkSession);
+  console.log("[CoupleSpace] zkSession:", JSON.stringify(zkSession));
   if (zkSession?.address) {
     const user = {
       address: zkSession.address,
