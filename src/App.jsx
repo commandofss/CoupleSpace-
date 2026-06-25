@@ -53,6 +53,29 @@ const ENOKI_API_KEY   = "enoki_public_81f69efa32009bbcc144f8f4a0a02219";
 const GOOGLE_CLIENT_ID = "822140699935-sqni61tg3nlbvp4sdvaq5jpmmq3k5vav.apps.googleusercontent.com";
 const ENOKI_BASE      = "https://api.enoki.mystenlabs.com/v1";
 
+const fetchZkLoginUser = async (jwt) => {
+  const res = await fetch(`${ENOKI_BASE}/zklogin`, {
+    method: "GET",
+    headers: {
+      "Authorization": `Bearer ${ENOKI_API_KEY}`,
+      "zklogin-jwt": jwt,
+    },
+  });
+  if (!res.ok) throw new Error(`Enoki error ${res.status}`);
+  const data = await res.json();
+  return {
+    address: data.data?.address ?? null,
+    salt:    data.data?.salt    ?? null,
+  };
+};
+
+const decodeJwtPayload = (jwt) => {
+  try {
+    const base64 = jwt.split(".")[1].replace(/-/g, "+").replace(/_/g, "/");
+    return JSON.parse(atob(base64));
+  } catch { return null; }
+};
+
 const shortAddr = (addr) => addr ? `${addr.slice(0,6)}…${addr.slice(-4)}` : "";
 const normalizeAddress = (addr) => (addr || "").trim().toLowerCase();
 const canonicalPair = (addrA, addrB) => {
