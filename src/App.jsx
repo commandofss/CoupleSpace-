@@ -277,24 +277,33 @@ export default function CoupleSpace() {
   },[]);
 
   useEffect(()=>{
-    if (!window.location.hash.includes("id_token")) return;
-    setZkLoading(true);
-    setScreen(SCREENS.ZKLOGIN);
-    (async () => {
-      try {
-        await enokiFlow.handleAuthCallback();
-        window.history.replaceState(null, "", window.location.pathname);
-        setZkLoading(false);
-      } catch(e) {
-        setZkError("Could not verify sign-in. " + (e.message || "Please try again."));
-        window.history.replaceState(null, "", window.location.pathname);
-        setZkLoading(false);
+  if (!window.location.hash.includes("id_token")) return;
+  setZkLoading(true);
+  setScreen(SCREENS.ZKLOGIN);
+  (async () => {
+    try {
+      await enokiFlow.handleAuthCallback();
+      window.history.replaceState(null, "", window.location.pathname);
+      setZkLoading(false);
+      const savedName = localStorage.getItem("cs_myName");
+      if (savedName) {
+        setMyName(savedName);
+        setNameInput(savedName);
+        goTo(SCREENS.LOGIN);
+      } else {
+        goTo(SCREENS.SETUP);
       }
-    })();
-  // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []);
+    } catch(e) {
+      setZkError("Could not verify sign-in. " + (e.message || "Please try again."));
+      window.history.replaceState(null, "", window.location.pathname);
+      setZkLoading(false);
+    }
+  })();
+// eslint-disable-next-line react-hooks/exhaustive-deps
+}, []);
 
   useEffect(()=>{
+  console.log("[CoupleSpace] zkSession:", zkSession);
   if (zkSession?.address) {
     const user = {
       address: zkSession.address,
