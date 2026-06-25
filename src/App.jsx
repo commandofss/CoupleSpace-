@@ -195,13 +195,8 @@ export default function CoupleSpace() {
 
   const myAddress = zkUser?.address ?? "0x0000…0000";
 
-  const [walletBalances, setWalletBalances] = useState({sui:12.45, usdc:340.00});
-  const [walletTxns, setWalletTxns] = useState([
-    {id:1,type:"received",token:"SUI", amount:10.00,  from:"0x4d7e…8f0a", date:"Jun 10, 2024",  note:"From Kofi"},
-    {id:2,type:"sent",    token:"USDC",amount:50.00,  to:"0x9f3a…2b1c",   date:"Jun 8, 2024",   note:"Savings contribution"},
-    {id:3,type:"received",token:"USDC",amount:200.00, from:"0x1a2b…6c9e", date:"Jun 5, 2024",   note:"Circle payout"},
-    {id:4,type:"sent",    token:"SUI", amount:2.00,   to:"0x7f8c…3a4b",   date:"Jun 1, 2024",   note:"Gas"},
-  ]);
+  const [walletBalances, setWalletBalances] = useState({sui:0, usdc:0});
+  const [walletTxns, setWalletTxns] = useState([]);
   const [showSendModal, setShowSendModal]       = useState(false);
   const [showReceiveModal, setShowReceiveModal] = useState(false);
   const [sendToken, setSendToken]               = useState("SUI");
@@ -212,12 +207,7 @@ export default function CoupleSpace() {
 
   const [vaultId, setVaultId] = useState(null);
 
-  const [messages, setMessages] = useState([
-    {id:1,from:"her",type:"text",text:"Good morning love ☀️",time:"8:02 AM"},
-    {id:2,from:"me",type:"text",text:"Morning beautiful 🌹",time:"8:04 AM"},
-    {id:3,from:"her",type:"text",text:"Did you check the savings pool?",time:"8:10 AM"},
-    {id:4,from:"me",type:"text",text:"Just did! We're at 68% now 🎯",time:"8:11 AM"},
-  ]);
+  const [messages, setMessages] = useState([]);
   const [chatInput, setChatInput] = useState("");
   const chatEndRef = useRef(null);
 
@@ -237,52 +227,29 @@ export default function CoupleSpace() {
   const recordingSecondsRef = useRef(0);
   const [mediaError, setMediaError] = useState("");
 
-  const [memories, setMemories] = useState([
-    {id:1,label:"First Date 🌹",date:"Jan 14, 2024",type:"image",icon:"🖼️",color:"#7C3AED"},
-    {id:2,label:"Lease Agreement",date:"Mar 2, 2024",type:"pdf",icon:"📄",color:"#0EA5E9"},
-    {id:3,label:"Anniversary Video",date:"Jun 18, 2024",type:"video",icon:"🎥",color:"#EC4899"},
-  ]);
+  const [memories, setMemories] = useState([]);
   const [showUploadModal, setShowUploadModal] = useState(false);
   const [uploadName, setUploadName] = useState("");
   const [uploading, setUploading] = useState(false);
   const memoryFileInputRef = useRef(null);
 
-  const [goals, setGoals] = useState([
-    {id:1,label:"Apartment Fund 🏠",token:"USDC",target:5000,saved:3400,myContrib:1800,partnerContrib:1600,myMonthlyCommit:300,partnerMonthlyCommit:300,myMisses:0,partnerMisses:0,releaseType:"percent",releaseValue:80,destinationWallet:"0x9f3a…2b1c",status:"active",createdDate:"2024-01-15",vaultId:null},
-    {id:2,label:"Vacation Fund 🌴",token:"USDC",target:2000,saved:800,myContrib:450,partnerContrib:350,myMonthlyCommit:150,partnerMonthlyCommit:150,myMisses:0,partnerMisses:0,releaseType:"date",releaseValue:"2024-12-25",destinationWallet:"0x4a2e…8c9f",status:"active",createdDate:"2024-03-01",vaultId:null},
-  ]);
-  const [activeGoal, setActiveGoal] = useState(goals[0]);
+  const [goals, setGoals] = useState([]);
+  const [activeGoal, setActiveGoal] = useState(null);
   const [showContributeModal, setShowContributeModal] = useState(false);
   const [contribAmount, setContribAmount] = useState("");
   const [showCreateGoalModal, setShowCreateGoalModal] = useState(false);
   const [newGoal, setNewGoal] = useState({label:"",token:"USDC",target:"",releaseType:"percent",releaseValue:"80"});
 
-  const [circles, setCircles] = useState([
-    {id:1,name:"Sunrise Ajo",circleId:"CIRC-0x9f3a",size:6,contribution:100,token:"USDC",gracePeriod:3,createdDate:"2024-01-01",status:"active",members:[
-      {addr:"0x9f3a…2b1c",name:"Amara K.",slot:1,paid:true,misses:0,received:false,stake:100},
-      {addr:"0x4d7e…8f0a",name:"Kofi M.",slot:2,paid:true,misses:0,received:false,stake:100},
-      {addr:"0x1a2b…6c9e",name:"Priya S.",slot:3,paid:false,misses:1,received:false,stake:100},
-      {addr:"0x7f8c…3a4b",name:"Diego R.",slot:4,paid:true,misses:0,received:false,stake:100},
-      {addr:"0x2e4f…9d5a",name:"Yuki T.",slot:5,paid:false,misses:2,received:false,stake:0,ejected:true},
-      {addr:"0x5b6c…1e2f",name:"Fatima L.",slot:6,paid:true,misses:0,received:false,stake:100},
-    ],currentRound:1,currentSlot:1,monthlyPool:600}
-  ]);
-  const [activeCircle, setActiveCircle] = useState(circles[0]);
+  const [circles, setCircles] = useState([]);
+  const [activeCircle, setActiveCircle] = useState(null);
   const [circleTab, setCircleTab] = useState("pool");
-  const [circleChat, setCircleChat] = useState([
-    {id:1,from:"Amara K.",color:"#1D9BF0",text:"Circle starts next week! Please fund your wallets 🙏",time:"10:00 AM"},
-    {id:2,from:"Kofi M.",color:"#1D9BF0",text:"Confirmed. When does the random draw happen?",time:"10:05 AM"},
-    {id:3,from:"Priya S.",color:"#0EA5E9",text:"The contract does it when Admin calls start 🔗",time:"10:08 AM"},
-  ]);
+  const [circleChat, setCircleChat] = useState([]);
   const [circleChatInput, setCircleChatInput] = useState("");
   const circleChatEndRef = useRef(null);
   const [showCircleCreateModal, setShowCircleCreateModal] = useState(false);
   const [newCircle, setNewCircle] = useState({name:"",size:"6",contribution:"100",token:"USDC",gracePeriod:"3"});
 
-  const [personalGoals, setPersonalGoals] = useState([
-    {id:1, label:"Emergency Fund 🛡️", token:"USDC", target:1000, saved:420, triggerType:"amount", triggerValue:"1000", destinationWallet:"0x7a2d…f9c3", status:"active", createdDate:"2024-04-01", contributions:[{month:"Apr",amount:200},{month:"May",amount:120},{month:"Jun",amount:100}]},
-    {id:2, label:"MacBook Pro 💻", token:"USDC", target:2500, saved:750, triggerType:"date", triggerValue:"2024-12-01", destinationWallet:"0x7a2d…f9c3", status:"active", createdDate:"2024-05-10", contributions:[{month:"May",amount:500},{month:"Jun",amount:250}]},
-  ]);
+  const [personalGoals, setPersonalGoals] = useState([]);
   const [activePersonalGoal, setActivePersonalGoal] = useState(null);
   const [showPersonalContrib, setShowPersonalContrib] = useState(false);
   const [personalContribAmount, setPersonalContribAmount] = useState("");
@@ -764,7 +731,7 @@ export default function CoupleSpace() {
       id:personalGoals.length+1, label:newPersonalGoal.label, token:newPersonalGoal.token,
       target:parseFloat(newPersonalGoal.target), saved:0,
       triggerType:newPersonalGoal.triggerType, triggerValue:newPersonalGoal.triggerValue,
-      destinationWallet:newPersonalGoal.destinationWallet||"0x7a2d…f9c3",
+      destinationWallet:newPersonalGoal.destinationWallet||myAddress,
       status:"active", createdDate:new Date().toISOString().split("T")[0], contributions:[],
     };
     setPersonalGoals(p=>[...p,g]);
