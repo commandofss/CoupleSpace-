@@ -1,0 +1,9 @@
+[package]
+name = "couplespace_contracts"
+version = "0.0.1"
+edition = "2024.beta"
+
+[dependencies]
+
+[addresses]
+couplespace = "0xc238fad3b2aff0808fad37ec6d653bf85f6f1ca529cc47ff5a6b51fd09b72f3e"
