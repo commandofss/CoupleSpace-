@@ -1142,31 +1142,42 @@ export default function CoupleSpace() {
           <p style={{fontFamily:"'Cormorant Garamond',serif",color:"#FFFFFF",fontSize:20,fontWeight:400,letterSpacing:0.5,margin:"0 0 4px"}}>{displayName} & {partnerName||"Your Partner"}</p>
           <p style={{fontFamily:"'DM Sans',sans-serif",color:"rgba(29,155,240,0.55)",fontSize:12,fontWeight:300,margin:"0 0 16px"}}>✨ Connected · 247 beautiful days</p>
           <div style={{display:"inline-flex",alignItems:"center",gap:8,background:"rgba(29,155,240,0.15)",borderRadius:20,padding:"6px 16px",border:"1px solid rgba(29,155,240,0.15)"}}>
-            <span style={{fontFamily:"'DM Mono',monospace",color:"rgba(29,155,240,0.7)",fontSize:11}}>Vault 0x7f3a…1b4c</span>
+            <span style={{fontFamily:"'DM Mono',monospace",color:"rgba(29,155,240,0.7)",fontSize:11}}>
+              {activeGoal?.vaultId ? `Vault ${shortAddr(activeGoal.vaultId)}` : "No vault yet"}
+            </span>
             <span style={{color:"rgba(29,155,240,0.5)",fontSize:10}}>🔐</span>
           </div>
         </div>
 
         <p style={S.sectionLabel}>Savings Together</p>
         <div className="f3" style={{background:"rgba(0,0,0,0.8)",borderRadius:22,padding:"20px",border:"1px solid rgba(29,155,240,0.15)",marginBottom:20,cursor:"pointer",boxShadow:"0 4px 24px rgba(0,0,0,0.3)"}} onClick={()=>{setActiveTab("savings");goTo(SCREENS.SAVINGS);}}>
-          <div style={{display:"flex",justifyContent:"space-between",alignItems:"flex-start",marginBottom:16}}>
-            <div>
-              <p style={{fontFamily:"'Cormorant Garamond',serif",color:"#FFFFFF",fontSize:28,fontWeight:400,letterSpacing:-0.5,margin:0}}>{activeGoal.saved} {activeGoal.token}</p>
-              <p style={{fontFamily:"'DM Sans',sans-serif",color:"rgba(29,155,240,0.5)",fontSize:12,margin:"4px 0 0",fontWeight:300}}>of {activeGoal.target} {activeGoal.token} goal · {activeGoal.label}</p>
+          {activeGoal ? (
+            <>
+              <div style={{display:"flex",justifyContent:"space-between",alignItems:"flex-start",marginBottom:16}}>
+                <div>
+                  <p style={{fontFamily:"'Cormorant Garamond',serif",color:"#FFFFFF",fontSize:28,fontWeight:400,letterSpacing:-0.5,margin:0}}>{activeGoal.saved} {activeGoal.token}</p>
+                  <p style={{fontFamily:"'DM Sans',sans-serif",color:"rgba(29,155,240,0.5)",fontSize:12,margin:"4px 0 0",fontWeight:300}}>of {activeGoal.target} {activeGoal.token} goal · {activeGoal.label}</p>
+                </div>
+                <svg width="54" height="54" viewBox="0 0 54 54">
+                  <circle cx="27" cy="27" r="23" fill="none" stroke="rgba(29,155,240,0.2)" strokeWidth="4"/>
+                  <circle cx="27" cy="27" r="23" fill="none" stroke="url(#pg)" strokeWidth="4" strokeDasharray={`${2*Math.PI*23*(pct/100)} ${2*Math.PI*23*(1-pct/100)}`} strokeDashoffset={2*Math.PI*23*0.25} strokeLinecap="round"/>
+                  <defs><linearGradient id="pg" x1="0%" y1="0%" x2="100%" y2="0%"><stop offset="0%" stopColor="#1D9BF0"/><stop offset="100%" stopColor="#1D9BF0"/></linearGradient></defs>
+                  <text x="27" y="31" textAnchor="middle" fill="#1D9BF0" fontSize="11" fontWeight="700" fontFamily="DM Sans">{pct}%</text>
+                </svg>
+              </div>
+              <div style={{height:4,background:"rgba(29,155,240,0.15)",borderRadius:10,overflow:"hidden",marginBottom:12}}>
+                <div style={{width:`${pct}%`,height:"100%",background:"linear-gradient(90deg,#1D9BF0,#1D9BF0)",borderRadius:10,transition:"width 0.6s ease"}}/>
+              </div>
+            </>
+          ) : (
+            <div style={{textAlign:"center",padding:"16px 0"}}>
+              <p style={{fontFamily:"'DM Sans',sans-serif",color:"rgba(29,155,240,0.4)",fontSize:13,margin:0}}>No savings goals yet</p>
+              <p style={{fontFamily:"'DM Sans',sans-serif",color:"rgba(29,155,240,0.25)",fontSize:11,marginTop:4}}>Tap to create your first goal</p>
             </div>
-            <svg width="54" height="54" viewBox="0 0 54 54">
-              <circle cx="27" cy="27" r="23" fill="none" stroke="rgba(29,155,240,0.2)" strokeWidth="4"/>
-              <circle cx="27" cy="27" r="23" fill="none" stroke="url(#pg)" strokeWidth="4" strokeDasharray={`${2*Math.PI*23*(pct/100)} ${2*Math.PI*23*(1-pct/100)}`} strokeDashoffset={2*Math.PI*23*0.25} strokeLinecap="round"/>
-              <defs><linearGradient id="pg" x1="0%" y1="0%" x2="100%" y2="0%"><stop offset="0%" stopColor="#1D9BF0"/><stop offset="100%" stopColor="#1D9BF0"/></linearGradient></defs>
-              <text x="27" y="31" textAnchor="middle" fill="#1D9BF0" fontSize="11" fontWeight="700" fontFamily="DM Sans">{pct}%</text>
-            </svg>
-          </div>
-          <div style={{height:4,background:"rgba(29,155,240,0.15)",borderRadius:10,overflow:"hidden",marginBottom:12}}>
-            <div style={{width:`${pct}%`,height:"100%",background:"linear-gradient(90deg,#1D9BF0,#1D9BF0)",borderRadius:10,transition:"width 0.6s ease"}}/>
-          </div>
+          )}
           <div style={{display:"flex",justifyContent:"space-between",alignItems:"center"}}>
             <div style={{background:"rgba(29,155,240,0.15)",borderRadius:20,padding:"4px 12px",border:"1px solid rgba(29,155,240,0.15)"}}>
-              <span style={{fontFamily:"'DM Sans',sans-serif",color:"#1D9BF0",fontSize:12}}>🎯 Active Goal</span>
+              <span style={{fontFamily:"'DM Sans',sans-serif",color:"#1D9BF0",fontSize:12}}>{activeGoal ? "🎯 Active Goal" : "💰 Savings Pool"}</span>
             </div>
             <span style={{color:"rgba(29,155,240,0.5)",fontSize:18}}>→</span>
           </div>
